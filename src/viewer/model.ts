@@ -1,4 +1,3 @@
-import { formatEventSummary } from "../inspector/format";
 import { buildResolutionForest, type ResolutionNode } from "../parser/resolutionTree";
 import { replayFromSnapshot, replayFromStart } from "../parser/replay";
 import type { CombatEvent, TurnStartedPayload } from "../types/events";
@@ -59,12 +58,6 @@ interface SeqBounds {
   end_seq: number;
 }
 
-function getSummaryWithoutSeq(event: CombatEvent): string {
-  const summary = formatEventSummary(event);
-  const prefix = `seq ${event.seq} `;
-  return summary.startsWith(prefix) ? summary.slice(prefix.length) : summary;
-}
-
 function computeNodeBounds(node: ResolutionNode): SeqBounds {
   let startSeq = node.trigger?.event_seq ?? Number.MAX_SAFE_INTEGER;
   let endSeq = node.trigger?.event_seq ?? Number.MIN_SAFE_INTEGER;
@@ -110,15 +103,13 @@ function buildRootActionMarkers(
   return roots
     .map((node, index) => {
       const bounds = computeNodeBounds(node);
-      const firstEvent = node.events[0];
-      const summary = firstEvent ? getSummaryWithoutSeq(firstEvent) : "resolution";
 
       return {
         index,
         resolution_id: node.resolution_id,
         start_seq: bounds.start_seq,
         end_seq: bounds.end_seq,
-        label: `${node.resolution_id} ${summary}`,
+        label: node.resolution_id,
         node,
       };
     })

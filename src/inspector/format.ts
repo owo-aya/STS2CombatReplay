@@ -11,7 +11,11 @@ import type {
   AttributionRef,
   CombatEvent,
   BlockChangedPayload,
+  CardAfflictionPayload,
+  CardEnchantmentPayload,
+  CardKeywordValue,
   CardModifiedPayload,
+  CardVisibleFlagsPayload,
   IntentChangedPayload,
   RelicModifiedPayload,
   PowerAppliedPayload,
@@ -204,11 +208,42 @@ export function formatEventSummary(event: CombatEvent): string {
       if (p.changes.cost !== undefined) {
         changes.push(`cost ${p.changes.cost.old}->${p.changes.cost.new}`);
       }
+      if (p.changes.star_cost !== undefined) {
+        changes.push(`star ${formatNullableNumber(p.changes.star_cost.old)}->${formatNullableNumber(p.changes.star_cost.new)}`);
+      }
       if (p.changes.upgraded !== undefined) {
         changes.push(`upgraded ${p.changes.upgraded.old}->${p.changes.upgraded.new}`);
       }
       if (p.changes.upgrade_level !== undefined) {
         changes.push(`lvl ${p.changes.upgrade_level.old}->${p.changes.upgrade_level.new}`);
+      }
+      if (p.changes.replay_count !== undefined) {
+        changes.push(`replay ${p.changes.replay_count.old}->${p.changes.replay_count.new}`);
+      }
+      if (p.changes.keywords !== undefined) {
+        changes.push(
+          `keywords ${formatCardKeywords(p.changes.keywords.old)}->${formatCardKeywords(p.changes.keywords.new)}`,
+        );
+      }
+      if (p.changes.visible_flags !== undefined) {
+        changes.push(
+          `flags ${formatCardVisibleFlags(p.changes.visible_flags.old)}->${formatCardVisibleFlags(p.changes.visible_flags.new)}`,
+        );
+      }
+      if (p.changes.enchantment !== undefined) {
+        changes.push(
+          `enchant ${formatCardEnchantment(p.changes.enchantment.old)}->${formatCardEnchantment(p.changes.enchantment.new)}`,
+        );
+      }
+      if (p.changes.affliction !== undefined) {
+        changes.push(
+          `afflict ${formatCardAffliction(p.changes.affliction.old)}->${formatCardAffliction(p.changes.affliction.new)}`,
+        );
+      }
+      if (p.changes.dynamic_values !== undefined) {
+        changes.push(
+          `vars ${formatDynamicValues(p.changes.dynamic_values.old)}->${formatDynamicValues(p.changes.dynamic_values.new)}`,
+        );
       }
       const reason = p.reason ? ` ${p.reason}` : "";
       const trigger = formatTriggerMeta(p.trigger);
@@ -433,6 +468,59 @@ function formatPowerTruthMeta(
 function formatTriggerMeta(trigger?: AttributionRef): string {
   const triggerLabel = formatAttributionRef(trigger);
   return triggerLabel ? ` trigger=${triggerLabel}` : "";
+}
+
+function formatNullableNumber(value: number | null): string {
+  return value === null ? "null" : String(value);
+}
+
+function formatCardKeywords(keywords: CardKeywordValue[]): string {
+  return `[${keywords.join(",")}]`;
+}
+
+function formatCardVisibleFlags(flags: CardVisibleFlagsPayload): string {
+  return `retain=${Boolean(flags.retain_this_turn)},sly=${Boolean(flags.sly_this_turn)}`;
+}
+
+function formatCardEnchantment(
+  enchantment: CardEnchantmentPayload | null,
+): string {
+  if (!enchantment) {
+    return "none";
+  }
+
+  const label = enchantment.name ?? enchantment.enchantment_id;
+  const parts: string[] = [];
+  if (enchantment.amount !== undefined) {
+    parts.push(String(enchantment.amount));
+  }
+  if (enchantment.status !== undefined) {
+    parts.push(enchantment.status);
+  }
+
+  return parts.length > 0 ? `${label}(${parts.join(",")})` : label;
+}
+
+function formatCardAffliction(
+  affliction: CardAfflictionPayload | null,
+): string {
+  if (!affliction) {
+    return "none";
+  }
+
+  const label = affliction.name ?? affliction.affliction_id;
+  if (affliction.amount === undefined) {
+    return label;
+  }
+
+  return `${label}(${affliction.amount})`;
+}
+
+function formatDynamicValues(values: Record<string, number>): string {
+  return Object.entries(values)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}:${value}`)
+    .join(",");
 }
 
 function formatBlockGainMeta(payload: BlockChangedPayload): string {

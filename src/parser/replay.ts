@@ -9,6 +9,10 @@ import type {
   EntitySpawnedPayload,
   CardCreatedPayload,
   CardModifiedPayload,
+  CardAfflictionPayload,
+  CardEnchantmentPayload,
+  CardKeywordValue,
+  CardVisibleFlagsPayload,
   RelicInitializedPayload,
   RelicModifiedPayload,
   RelicObtainedPayload,
@@ -41,6 +45,51 @@ import type { Snapshot } from "../types/snapshot";
 
 function normalizeOptionalNumber(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
+}
+
+function cloneCardKeywords(
+  keywords: CardKeywordValue[] | undefined,
+): CardKeywordValue[] | undefined {
+  return keywords ? [...keywords] : undefined;
+}
+
+function cloneCardVisibleFlags(
+  flags: CardVisibleFlagsPayload | undefined,
+): CardVisibleFlagsPayload | undefined {
+  if (!flags) {
+    return undefined;
+  }
+
+  return {
+    retain_this_turn: Boolean(flags.retain_this_turn),
+    sly_this_turn: Boolean(flags.sly_this_turn),
+  };
+}
+
+function cloneCardEnchantment(
+  enchantment: CardEnchantmentPayload | undefined | null,
+): CardEnchantmentPayload | undefined {
+  if (!enchantment) {
+    return undefined;
+  }
+
+  return { ...enchantment };
+}
+
+function cloneCardAffliction(
+  affliction: CardAfflictionPayload | undefined | null,
+): CardAfflictionPayload | undefined {
+  if (!affliction) {
+    return undefined;
+  }
+
+  return { ...affliction };
+}
+
+function cloneCardDynamicValues(
+  values: Record<string, number> | undefined,
+): Record<string, number> | undefined {
+  return values ? { ...values } : undefined;
 }
 
 function cloneZones(zones: Snapshot["zones"]): BattleState["zones"] {
@@ -253,6 +302,13 @@ export function hydrateFromSnapshot(
       owner_entity_id: sc.owner_entity_id,
       zone: sc.zone,
       cost: sc.cost,
+      star_cost: sc.star_cost,
+      replay_count: sc.replay_count,
+      keywords: cloneCardKeywords(sc.keywords),
+      visible_flags: cloneCardVisibleFlags(sc.visible_flags),
+      enchantment: cloneCardEnchantment(sc.enchantment),
+      affliction: cloneCardAffliction(sc.affliction),
+      dynamic_values: cloneCardDynamicValues(sc.dynamic_values),
       current_upgrade_level: sc.current_upgrade_level,
       created_this_combat: false,
       temporary: false,
@@ -377,6 +433,13 @@ export function applyEvent(state: BattleState, event: CombatEvent): void {
         owner_entity_id: p.owner_entity_id,
         zone: p.initial_zone,
         cost: p.cost,
+        star_cost: p.star_cost,
+        replay_count: p.replay_count,
+        keywords: cloneCardKeywords(p.keywords),
+        visible_flags: cloneCardVisibleFlags(p.visible_flags),
+        enchantment: cloneCardEnchantment(p.enchantment),
+        affliction: cloneCardAffliction(p.affliction),
+        dynamic_values: cloneCardDynamicValues(p.dynamic_values),
         current_upgrade_level: p.current_upgrade_level,
         created_this_combat: p.created_this_combat ?? false,
         temporary: p.temporary ?? false,
@@ -472,10 +535,31 @@ export function applyEvent(state: BattleState, event: CombatEvent): void {
         if (p.changes.cost !== undefined) {
           card.cost = p.changes.cost.new;
         }
+        if (p.changes.star_cost !== undefined) {
+          card.star_cost = p.changes.star_cost.new ?? undefined;
+        }
         if (p.changes.upgrade_level !== undefined) {
           card.current_upgrade_level = p.changes.upgrade_level.new;
         } else if (p.current_upgrade_level !== undefined) {
           card.current_upgrade_level = p.current_upgrade_level;
+        }
+        if (p.changes.replay_count !== undefined) {
+          card.replay_count = p.changes.replay_count.new;
+        }
+        if (p.changes.keywords !== undefined) {
+          card.keywords = cloneCardKeywords(p.changes.keywords.new);
+        }
+        if (p.changes.visible_flags !== undefined) {
+          card.visible_flags = cloneCardVisibleFlags(p.changes.visible_flags.new);
+        }
+        if (p.changes.enchantment !== undefined) {
+          card.enchantment = cloneCardEnchantment(p.changes.enchantment.new);
+        }
+        if (p.changes.affliction !== undefined) {
+          card.affliction = cloneCardAffliction(p.changes.affliction.new);
+        }
+        if (p.changes.dynamic_values !== undefined) {
+          card.dynamic_values = cloneCardDynamicValues(p.changes.dynamic_values.new);
         }
         if (p.card_name !== undefined) {
           card.card_name = p.card_name;

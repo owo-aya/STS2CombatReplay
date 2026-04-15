@@ -1,4 +1,11 @@
-import type { OrbStatePayload, RelicStatePayload } from "./events";
+import type {
+  CardAfflictionPayload,
+  CardEnchantmentPayload,
+  CardKeywordValue,
+  CardVisibleFlagsPayload,
+  OrbStatePayload,
+  RelicStatePayload,
+} from "./events";
 
 export interface SnapshotPower {
   power_id: string;
@@ -39,6 +46,13 @@ export interface SnapshotCard {
   owner_entity_id: string;
   zone: string;
   cost?: number;
+  star_cost?: number;
+  replay_count?: number;
+  keywords?: CardKeywordValue[];
+  visible_flags?: CardVisibleFlagsPayload;
+  enchantment?: CardEnchantmentPayload;
+  affliction?: CardAfflictionPayload;
+  dynamic_values?: Record<string, number>;
   current_upgrade_level?: number;
 }
 

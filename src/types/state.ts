@@ -1,4 +1,12 @@
-import type { CombatEvent, OrbStatePayload, RelicStatePayload } from "./events";
+import type {
+  CardAfflictionPayload,
+  CardEnchantmentPayload,
+  CardKeywordValue,
+  CardVisibleFlagsPayload,
+  CombatEvent,
+  OrbStatePayload,
+  RelicStatePayload,
+} from "./events";
 
 export interface IntentState {
   intent_id: string;
@@ -42,6 +50,13 @@ export interface CardInstanceState {
   owner_entity_id: string;
   zone: string;
   cost?: number;
+  star_cost?: number;
+  replay_count?: number;
+  keywords?: CardKeywordValue[];
+  visible_flags?: CardVisibleFlagsPayload;
+  enchantment?: CardEnchantmentPayload;
+  affliction?: CardAfflictionPayload;
+  dynamic_values?: Record<string, number>;
   current_upgrade_level?: number;
   created_this_combat: boolean;
   temporary: boolean;

@@ -922,7 +922,7 @@ public static partial class BattleLogger
             TrackCardCreation(cid, ci.Zone);
             _cardOrder.Add(cid);
 
-            EmitEvent("card_created", new Dictionary<string, object?>
+            var createPayload = new Dictionary<string, object?>
             {
                 ["card_instance_id"] = cid,
                 ["card_def_id"] = ci.DefId,
@@ -933,7 +933,9 @@ public static partial class BattleLogger
                 ["current_upgrade_level"] = ci.Model.CurrentUpgradeLevel,
                 ["created_this_combat"] = false,
                 ["temporary"] = false,
-            });
+            };
+            AppendCardVisibleStatePayload(createPayload, CaptureCardTruthState(ci.Model), includeCost: false, includeUpgradeLevel: false);
+            EmitEvent("card_created", createPayload);
             _cardCosts[cid] = ci.Cost;
         }
     }
@@ -987,6 +989,71 @@ public static partial class BattleLogger
         {
             Log.Error($"[STS2CombatRecorder] OnCardEnteredCombat failed: {ex.Message}");
             DebugFileLogger.Error(nameof(BattleLogger) + ".OnCardEnteredCombat", ex);
+        }
+    }
+
+    internal static CardTruthStateSnapshot CaptureCardTruthState(CardModel card)
+    {
+        return CardTruthStateSnapshot.Capture(card);
+    }
+
+    internal static void OnCardStateModified(
+        CardModel card,
+        CardTruthStateSnapshot oldState,
+        string reason,
+        CardTruthDiffFields allowedFields = CardTruthDiffFields.All)
+    {
+        if (!_active || !_initDone)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!_cardModelToId.TryGetValue(card, out var cardId))
+            {
+                DebugFileLogger.Log(
+                    nameof(BattleLogger) + ".OnCardStateModified",
+                    $"Skipped untracked card mutation. card_model={card.Id?.Entry ?? card.GetType().Name}, reason={reason}");
+                return;
+            }
+
+            var newState = CaptureCardTruthState(card);
+            var changes = BuildCardModifiedChanges(oldState, newState, allowedFields);
+            if (changes.Count == 0)
+            {
+                return;
+            }
+
+            _cardCosts[cardId] = newState.Cost;
+
+            var payload = new Dictionary<string, object?>
+            {
+                ["card_instance_id"] = cardId,
+                ["changes"] = changes,
+                ["reason"] = reason,
+            };
+
+            if (!string.Equals(oldState.CardName, newState.CardName, StringComparison.Ordinal))
+            {
+                payload["card_name"] = newState.CardName;
+            }
+
+            if (allowedFields.HasFlag(CardTruthDiffFields.Upgrade) ||
+                oldState.CurrentUpgradeLevel != newState.CurrentUpgradeLevel)
+            {
+                payload["current_upgrade_level"] = newState.CurrentUpgradeLevel;
+            }
+
+            var attrContext = GetAttributionContext();
+            AppendTriggerField(payload, ResolveCardModifiedTriggerRef());
+            EmitEvent("card_modified", _phase, attrContext, payload, dispatchMode: EventDispatchMode.PublicAndShadowHook);
+            MarkPendingSnapshotRelevantChange("card_modified");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] OnCardStateModified failed: {ex.Message}");
+            DebugFileLogger.Error(nameof(BattleLogger) + ".OnCardStateModified", ex);
         }
     }
 
@@ -1246,6 +1313,7 @@ public static partial class BattleLogger
             ["created_this_combat"] = true,
             ["temporary"] = false,
         };
+        AppendCardVisibleStatePayload(createPayload, CaptureCardTruthState(card), includeCost: false, includeUpgradeLevel: false);
         AppendTriggerField(createPayload, ResolveCardTruthTriggerRef());
         EmitEvent("card_created", _turnIndex, _phase, ctx, createPayload, dispatchMode: EventDispatchMode.PublicAndShadowHook);
 
@@ -4855,6 +4923,282 @@ public static partial class BattleLogger
                string.Equals(kind, "generic_model", StringComparison.Ordinal);
     }
 
+    private static Dictionary<string, object?> BuildCardModifiedChanges(
+        CardTruthStateSnapshot oldState,
+        CardTruthStateSnapshot newState,
+        CardTruthDiffFields allowedFields)
+    {
+        var changes = new Dictionary<string, object?>();
+
+        if (allowedFields.HasFlag(CardTruthDiffFields.Cost) && oldState.Cost != newState.Cost)
+        {
+            changes["cost"] = new Dictionary<string, object?>
+            {
+                ["old"] = oldState.Cost,
+                ["new"] = newState.Cost,
+            };
+        }
+
+        if (allowedFields.HasFlag(CardTruthDiffFields.StarCost) && oldState.StarCost != newState.StarCost)
+        {
+            changes["star_cost"] = new Dictionary<string, object?>
+            {
+                ["old"] = oldState.StarCost,
+                ["new"] = newState.StarCost,
+            };
+        }
+
+        if (allowedFields.HasFlag(CardTruthDiffFields.Upgrade) &&
+            (oldState.CurrentUpgradeLevel != newState.CurrentUpgradeLevel))
+        {
+            changes["upgraded"] = new Dictionary<string, object?>
+            {
+                ["old"] = oldState.CurrentUpgradeLevel > 0,
+                ["new"] = newState.CurrentUpgradeLevel > 0,
+            };
+            changes["upgrade_level"] = new Dictionary<string, object?>
+            {
+                ["old"] = oldState.CurrentUpgradeLevel,
+                ["new"] = newState.CurrentUpgradeLevel,
+            };
+        }
+
+        if (allowedFields.HasFlag(CardTruthDiffFields.ReplayCount) &&
+            oldState.ReplayCount != newState.ReplayCount)
+        {
+            changes["replay_count"] = new Dictionary<string, object?>
+            {
+                ["old"] = oldState.ReplayCount,
+                ["new"] = newState.ReplayCount,
+            };
+        }
+
+        if (allowedFields.HasFlag(CardTruthDiffFields.Keywords) &&
+            !oldState.Keywords.SequenceEqual(newState.Keywords, StringComparer.Ordinal))
+        {
+            changes["keywords"] = new Dictionary<string, object?>
+            {
+                ["old"] = new List<string>(oldState.Keywords),
+                ["new"] = new List<string>(newState.Keywords),
+            };
+        }
+
+        if (allowedFields.HasFlag(CardTruthDiffFields.VisibleFlags) &&
+            !VisibleFlagsEqual(oldState.VisibleFlags, newState.VisibleFlags))
+        {
+            changes["visible_flags"] = new Dictionary<string, object?>
+            {
+                ["old"] = BuildVisibleFlagsPayload(oldState.VisibleFlags, includeFalseValues: true),
+                ["new"] = BuildVisibleFlagsPayload(newState.VisibleFlags, includeFalseValues: true),
+            };
+        }
+
+        if (allowedFields.HasFlag(CardTruthDiffFields.Enchantment) &&
+            !EnchantmentSnapshotsEqual(oldState.Enchantment, newState.Enchantment))
+        {
+            changes["enchantment"] = new Dictionary<string, object?>
+            {
+                ["old"] = BuildEnchantmentPayload(oldState.Enchantment),
+                ["new"] = BuildEnchantmentPayload(newState.Enchantment),
+            };
+        }
+
+        if (allowedFields.HasFlag(CardTruthDiffFields.Affliction) &&
+            !AfflictionSnapshotsEqual(oldState.Affliction, newState.Affliction))
+        {
+            changes["affliction"] = new Dictionary<string, object?>
+            {
+                ["old"] = BuildAfflictionPayload(oldState.Affliction),
+                ["new"] = BuildAfflictionPayload(newState.Affliction),
+            };
+        }
+
+        if (allowedFields.HasFlag(CardTruthDiffFields.DynamicValues) &&
+            !DynamicValuesEqual(oldState.DynamicValues, newState.DynamicValues))
+        {
+            changes["dynamic_values"] = new Dictionary<string, object?>
+            {
+                ["old"] = BuildDynamicValuesPayload(oldState.DynamicValues),
+                ["new"] = BuildDynamicValuesPayload(newState.DynamicValues),
+            };
+        }
+
+        return changes;
+    }
+
+    private static void AppendCardVisibleStatePayload(
+        Dictionary<string, object?> payload,
+        CardTruthStateSnapshot state,
+        bool includeCost = true,
+        bool includeUpgradeLevel = true)
+    {
+        if (includeCost)
+        {
+            payload["cost"] = state.Cost;
+        }
+
+        if (includeUpgradeLevel)
+        {
+            payload["current_upgrade_level"] = state.CurrentUpgradeLevel;
+        }
+
+        if (state.StarCost.HasValue)
+        {
+            payload["star_cost"] = state.StarCost.Value;
+        }
+
+        if (state.ReplayCount > 0)
+        {
+            payload["replay_count"] = state.ReplayCount;
+        }
+
+        if (state.Keywords.Count > 0)
+        {
+            payload["keywords"] = new List<string>(state.Keywords);
+        }
+
+        var visibleFlags = BuildVisibleFlagsPayload(state.VisibleFlags, includeFalseValues: false);
+        if (visibleFlags.Count > 0)
+        {
+            payload["visible_flags"] = visibleFlags;
+        }
+
+        var enchantment = BuildEnchantmentPayload(state.Enchantment);
+        if (enchantment != null)
+        {
+            payload["enchantment"] = enchantment;
+        }
+
+        var affliction = BuildAfflictionPayload(state.Affliction);
+        if (affliction != null)
+        {
+            payload["affliction"] = affliction;
+        }
+
+        if (state.DynamicValues.Count > 0)
+        {
+            payload["dynamic_values"] = BuildDynamicValuesPayload(state.DynamicValues);
+        }
+    }
+
+    private static Dictionary<string, object?> BuildVisibleFlagsPayload(
+        CardVisibleFlagsSnapshot flags,
+        bool includeFalseValues)
+    {
+        var payload = new Dictionary<string, object?>();
+        if (includeFalseValues || flags.RetainThisTurn)
+        {
+            payload["retain_this_turn"] = flags.RetainThisTurn;
+        }
+
+        if (includeFalseValues || flags.SlyThisTurn)
+        {
+            payload["sly_this_turn"] = flags.SlyThisTurn;
+        }
+
+        return payload;
+    }
+
+    private static Dictionary<string, object?>? BuildEnchantmentPayload(CardEnchantmentSnapshot? snapshot)
+    {
+        if (snapshot == null)
+        {
+            return null;
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["enchantment_id"] = snapshot.EnchantmentId,
+            ["name"] = snapshot.Name,
+            ["amount"] = snapshot.Amount,
+            ["status"] = snapshot.Status,
+            ["display_amount"] = snapshot.DisplayAmount,
+            ["show_amount"] = snapshot.ShowAmount,
+        };
+    }
+
+    private static Dictionary<string, object?>? BuildAfflictionPayload(CardAfflictionSnapshot? snapshot)
+    {
+        if (snapshot == null)
+        {
+            return null;
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["affliction_id"] = snapshot.AfflictionId,
+            ["name"] = snapshot.Name,
+            ["amount"] = snapshot.Amount,
+        };
+    }
+
+    private static Dictionary<string, object?> BuildDynamicValuesPayload(IReadOnlyDictionary<string, int> values)
+    {
+        return values.ToDictionary(
+            entry => entry.Key,
+            entry => (object?)entry.Value,
+            StringComparer.Ordinal);
+    }
+
+    private static bool VisibleFlagsEqual(
+        CardVisibleFlagsSnapshot left,
+        CardVisibleFlagsSnapshot right)
+    {
+        return left.RetainThisTurn == right.RetainThisTurn &&
+               left.SlyThisTurn == right.SlyThisTurn;
+    }
+
+    private static bool EnchantmentSnapshotsEqual(
+        CardEnchantmentSnapshot? left,
+        CardEnchantmentSnapshot? right)
+    {
+        if (left == null || right == null)
+        {
+            return left == right;
+        }
+
+        return string.Equals(left.EnchantmentId, right.EnchantmentId, StringComparison.Ordinal) &&
+               string.Equals(left.Name, right.Name, StringComparison.Ordinal) &&
+               left.Amount == right.Amount &&
+               string.Equals(left.Status, right.Status, StringComparison.Ordinal) &&
+               left.DisplayAmount == right.DisplayAmount &&
+               left.ShowAmount == right.ShowAmount;
+    }
+
+    private static bool AfflictionSnapshotsEqual(
+        CardAfflictionSnapshot? left,
+        CardAfflictionSnapshot? right)
+    {
+        if (left == null || right == null)
+        {
+            return left == right;
+        }
+
+        return string.Equals(left.AfflictionId, right.AfflictionId, StringComparison.Ordinal) &&
+               string.Equals(left.Name, right.Name, StringComparison.Ordinal) &&
+               left.Amount == right.Amount;
+    }
+
+    private static bool DynamicValuesEqual(
+        IReadOnlyDictionary<string, int> left,
+        IReadOnlyDictionary<string, int> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        foreach (var (key, leftValue) in left)
+        {
+            if (!right.TryGetValue(key, out var rightValue) || leftValue != rightValue)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static Dictionary<string, object?>? ResolveAttributionContextTriggerRef(
         AttributionContext? attributionContext,
         bool includeEnemyMove)
@@ -5426,6 +5770,46 @@ public static partial class BattleLogger
                 {
                     builder.Append(cardId).Append(',');
                 }
+                builder.Append('|');
+            }
+
+            foreach (var (model, cardId) in _cardModelToId.OrderBy(entry => entry.Value, StringComparer.Ordinal))
+            {
+                var cardState = CaptureCardTruthState(model);
+                builder.Append("card:")
+                    .Append(cardId)
+                    .Append(':')
+                    .Append(cardState.Cost)
+                    .Append(':')
+                    .Append(cardState.StarCost?.ToString() ?? "null")
+                    .Append(':')
+                    .Append(cardState.CurrentUpgradeLevel)
+                    .Append(':')
+                    .Append(cardState.ReplayCount)
+                    .Append(':')
+                    .Append(string.Join(",", cardState.Keywords))
+                    .Append(':')
+                    .Append(cardState.VisibleFlags.RetainThisTurn ? '1' : '0')
+                    .Append(cardState.VisibleFlags.SlyThisTurn ? '1' : '0')
+                    .Append(':')
+                    .Append(cardState.Enchantment?.EnchantmentId ?? "null")
+                    .Append(':')
+                    .Append(cardState.Enchantment?.Amount.ToString() ?? "null")
+                    .Append(':')
+                    .Append(cardState.Enchantment?.Status ?? "null")
+                    .Append(':')
+                    .Append(cardState.Affliction?.AfflictionId ?? "null")
+                    .Append(':')
+                    .Append(cardState.Affliction?.Amount.ToString() ?? "null");
+
+                foreach (var dynamicValue in cardState.DynamicValues.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+                {
+                    builder.Append(':')
+                        .Append(dynamicValue.Key)
+                        .Append('=')
+                        .Append(dynamicValue.Value);
+                }
+
                 builder.Append('|');
             }
         }
@@ -6033,15 +6417,17 @@ public static partial class BattleLogger
                 ? trackedZone
                 : "unknown";
 
-            cards[cardId] = new Dictionary<string, object?>
+            var cardState = CaptureCardTruthState(model);
+
+            var payload = new Dictionary<string, object?>
             {
                 ["card_def_id"] = model.Id?.Entry ?? GameStateReader.ToSnakeCase(model.GetType().Name),
                 ["card_name"] = model.Title?.ToString() ?? model.GetType().Name,
                 ["owner_entity_id"] = _playerEntityId,
                 ["zone"] = zone,
-                ["cost"] = GameStateReader.GetEnergyCost(model),
-                ["current_upgrade_level"] = model.CurrentUpgradeLevel,
             };
+            AppendCardVisibleStatePayload(payload, cardState);
+            cards[cardId] = payload;
         }
 
         return cards;

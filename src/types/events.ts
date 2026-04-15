@@ -70,6 +70,37 @@ export interface EntityRevivedPayload {
   trigger?: AttributionRef;
 }
 
+export type CardKeywordValue =
+  | "exhaust"
+  | "ethereal"
+  | "innate"
+  | "unplayable"
+  | "retain"
+  | "sly"
+  | "eternal";
+
+export interface CardVisibleFlagsPayload {
+  retain_this_turn?: boolean;
+  sly_this_turn?: boolean;
+}
+
+export type CardEnchantmentStatusValue = "normal" | "disabled";
+
+export interface CardEnchantmentPayload {
+  enchantment_id: string;
+  name?: string;
+  amount?: number;
+  status?: CardEnchantmentStatusValue;
+  display_amount?: number;
+  show_amount?: boolean;
+}
+
+export interface CardAfflictionPayload {
+  affliction_id: string;
+  name?: string;
+  amount?: number;
+}
+
 export interface CardCreatedPayload {
   card_instance_id: string;
   card_def_id: string;
@@ -77,6 +108,13 @@ export interface CardCreatedPayload {
   initial_zone: string;
   card_name?: string;
   cost?: number;
+  star_cost?: number;
+  replay_count?: number;
+  keywords?: CardKeywordValue[];
+  visible_flags?: CardVisibleFlagsPayload;
+  enchantment?: CardEnchantmentPayload;
+  affliction?: CardAfflictionPayload;
+  dynamic_values?: Record<string, number>;
   current_upgrade_level?: number;
   created_this_combat?: boolean;
   temporary?: boolean;
@@ -165,6 +203,10 @@ export interface CardModifiedPayload {
       old: number;
       new: number;
     };
+    star_cost?: {
+      old: number | null;
+      new: number | null;
+    };
     upgraded?: {
       old: boolean;
       new: boolean;
@@ -172,6 +214,30 @@ export interface CardModifiedPayload {
     upgrade_level?: {
       old: number;
       new: number;
+    };
+    replay_count?: {
+      old: number;
+      new: number;
+    };
+    keywords?: {
+      old: CardKeywordValue[];
+      new: CardKeywordValue[];
+    };
+    visible_flags?: {
+      old: CardVisibleFlagsPayload;
+      new: CardVisibleFlagsPayload;
+    };
+    enchantment?: {
+      old: CardEnchantmentPayload | null;
+      new: CardEnchantmentPayload | null;
+    };
+    affliction?: {
+      old: CardAfflictionPayload | null;
+      new: CardAfflictionPayload | null;
+    };
+    dynamic_values?: {
+      old: Record<string, number>;
+      new: Record<string, number>;
     };
   };
   reason?: string;

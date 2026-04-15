@@ -6,6 +6,7 @@
     "test": "bun test",
     "inspect": "bun run src/inspector/cli.ts",
     "audit:truth": "bun run src/inspector/truthAudit.ts",
-    "viewer": "bun run src/viewer/server.ts"
+    "viewer": "bun run src/viewer/server.ts",
+    "viewer:build": "bun run src/viewer/build.ts"
   }
 }

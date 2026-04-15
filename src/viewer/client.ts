@@ -1,7 +1,11 @@
-import { formatEventSummary } from "../inspector/format";
-import type { ResolutionNode } from "../parser/resolutionTree";
-import type { IntentState, PowerState } from "../types/state";
 import type { Snapshot } from "../types/snapshot";
+import type {
+  BattleState,
+  CardInstanceState,
+  EntityState,
+  PowerState,
+  RelicState,
+} from "../types/state";
 import { deserializeSnapshotMap, loadBattleFromBrowserFiles } from "./browserLoader";
 import {
   createViewerModel,
@@ -12,6 +16,22 @@ import {
   type ViewerBattleModel,
   type ViewerFrame,
 } from "./model";
+import {
+  buildBattleOverview,
+  buildKeyMoments,
+  buildStepSummary,
+  collectViewerAlerts,
+  formatActionLabel,
+  formatIntent,
+  labelCard,
+  labelEntity,
+  labelOrb,
+  labelPotion,
+  labelRelic,
+  type BattleOverview,
+  type KeyMoment,
+  type ViewerAlert,
+} from "./presenter";
 
 interface SerializedBattleData {
   metadata: ViewerBattleData["metadata"];
@@ -19,26 +39,47 @@ interface SerializedBattleData {
   snapshots: Record<string, Snapshot>;
 }
 
+interface FixtureDescriptor {
+  id: string;
+  label: string;
+  note?: string;
+}
+
+interface LoadedBattleState {
+  model: ViewerBattleModel;
+  overview: BattleOverview;
+  keyMoments: KeyMoment[];
+  alerts: ViewerAlert[];
+  sourceLabel: string;
+  actionLabels: string[];
+}
+
 interface ViewerState {
-  model?: ViewerBattleModel;
+  loaded?: LoadedBattleState;
   currentSeq?: number;
   status: string;
   error?: string;
+  loading: boolean;
   isPlaying: boolean;
-  playSpeed: number;
-  playTimer?: ReturnType<typeof setInterval>;
+  playMode: "action" | "event";
+  playSpeedMs: number;
+  playTimer?: ReturnType<typeof window.setInterval>;
+  fixtures: FixtureDescriptor[];
 }
-
-const state: ViewerState = {
-  status: "Load a fixture or choose a battle container folder.",
-  isPlaying: false,
-  playSpeed: 1000,
-};
 
 const root = document.getElementById("app");
 if (!root) {
   throw new Error("Viewer root element not found.");
 }
+
+const state: ViewerState = {
+  status: "Open a battle folder or load a sample fixture.",
+  loading: false,
+  isPlaying: false,
+  playMode: "action",
+  playSpeedMs: 900,
+  fixtures: [],
+};
 
 function escapeHtml(value: string): string {
   return value
@@ -49,82 +90,67 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-function getCardType(defId: string): "attack" | "skill" | "power" | "neutral" {
-  const upper = defId.toUpperCase();
+function getApiUrl(relativePath: string): string {
+  return new URL(relativePath, window.location.href).toString();
+}
+
+function normalizeFixtureDescriptor(value: unknown): FixtureDescriptor | null {
+  if (typeof value === "string") {
+    return {
+      id: value,
+      label: value.replaceAll(/[_-]+/g, " "),
+    };
+  }
+
   if (
-    upper.includes("STRIKE") ||
-    upper.includes("CORROSIVE_WAVE") ||
-    upper.includes("PINPOINT")
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { id?: unknown }).id === "string"
   ) {
-    return "attack";
+    return {
+      id: (value as { id: string }).id,
+      label:
+        typeof (value as { label?: unknown }).label === "string"
+          ? ((value as { label: string }).label)
+          : (value as { id: string }).id.replaceAll(/[_-]+/g, " "),
+      note:
+        typeof (value as { note?: unknown }).note === "string"
+          ? (value as { note: string }).note
+          : undefined,
+    };
   }
-  if (
-    upper.includes("DEFEND") ||
-    upper.includes("SURVIVOR") ||
-    upper.includes("PREPARED") ||
-    upper.includes("DEFLECT") ||
-    upper.includes("NEUTRALIZE")
-  ) {
-    return "skill";
-  }
-  if (
-    upper.includes("FOOTWORK") ||
-    upper.includes("NOXIOUS_FUMES") ||
-    upper.includes("STORM_OF_STEEL")
-  ) {
-    return "power";
-  }
-  return "neutral";
+
+  return null;
 }
 
-function getIntentClass(intent?: IntentState): string {
-  if (!intent) return "intent-unknown";
-  const name = (intent.intent_name ?? intent.intent_id).toLowerCase();
-  if (name.includes("attack") || name.includes("strike")) return "intent-attack";
-  if (name.includes("buff") || name.includes("strength") || name.includes("dexterity"))
-    return "intent-buff";
-  if (name.includes("debuff") || name.includes("weak") || name.includes("vulnerable") || name.includes("frail"))
-    return "intent-debuff";
-  if (name.includes("defend") || name.includes("block") || name.includes("shield"))
-    return "intent-defend";
-  return "intent-unknown";
+async function loadFixtures(): Promise<void> {
+  try {
+    const response = await fetch(getApiUrl("./api/fixtures"));
+    if (!response.ok) {
+      return;
+    }
+
+    const payload = await response.json();
+    const items = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload.fixtures)
+        ? payload.fixtures
+        : [];
+    state.fixtures = items
+      .map(normalizeFixtureDescriptor)
+      .filter((entry): entry is FixtureDescriptor => entry !== null);
+    render();
+  } catch {
+    state.fixtures = [];
+  }
 }
 
-function getIntentIcon(intent?: IntentState): string {
-  if (!intent) return "?";
-  const name = (intent.intent_name ?? intent.intent_id).toLowerCase();
-  if (name.includes("attack") || name.includes("strike")) return "\u2694\uFE0F";
-  if (name.includes("buff") || name.includes("strength") || name.includes("dexterity")) return "\u2B06\uFE0F";
-  if (name.includes("debuff") || name.includes("weak") || name.includes("vulnerable") || name.includes("frail")) return "\u2B07\uFE0F";
-  if (name.includes("defend") || name.includes("block") || name.includes("shield")) return "\uD83D\uDEE1\uFE0F";
-  return "\u2022";
-}
-
-function formatIntent(intent?: IntentState): string {
-  if (!intent) {
-    return "No Intent";
+function stopPlayback(): void {
+  if (state.playTimer !== undefined) {
+    window.clearInterval(state.playTimer);
+    state.playTimer = undefined;
   }
-
-  const label = intent.intent_name ?? intent.intent_id;
-  if (intent.projected_damage === undefined) {
-    return label;
-  }
-
-  if (intent.projected_hits !== undefined && intent.projected_hits > 1) {
-    return `${label} ${intent.projected_damage}x${intent.projected_hits}`;
-  }
-
-  return `${label} ${intent.projected_damage}`;
-}
-
-function formatPowers(powers: Record<string, PowerState>): string[] {
-  return Object.values(powers)
-    .sort((left, right) => {
-      const leftLabel = left.power_name ?? left.power_id;
-      const rightLabel = right.power_name ?? right.power_id;
-      return leftLabel.localeCompare(rightLabel);
-    })
-    .map((power) => `${power.power_name ?? power.power_id} ${power.stacks}`);
+  state.isPlaying = false;
 }
 
 function getInitialSeq(model: ViewerBattleModel): number {
@@ -136,696 +162,974 @@ function getInitialSeq(model: ViewerBattleModel): number {
   );
 }
 
-function renderPowerPills(powers: string[]): string {
-  if (powers.length === 0) {
-    return `<span class="chip muted-fill">No Powers</span>`;
+function createLoadedState(data: ViewerBattleData, sourceLabel: string): LoadedBattleState {
+  const model = createViewerModel(data);
+  return {
+    model,
+    overview: buildBattleOverview(model, sourceLabel),
+    keyMoments: buildKeyMoments(model),
+    alerts: collectViewerAlerts(model.metadata),
+    sourceLabel,
+    actionLabels: model.root_action_markers.map((marker) => formatActionLabel(marker)),
+  };
+}
+
+function applyLoadedBattle(data: ViewerBattleData, sourceLabel: string): void {
+  stopPlayback();
+  const loaded = createLoadedState(data, sourceLabel);
+  state.loaded = loaded;
+  state.currentSeq = getInitialSeq(loaded.model);
+  state.error = undefined;
+  state.status = `Loaded ${sourceLabel} · ${loaded.model.events.length} events`;
+  render();
+}
+
+async function withLoading<T>(task: () => Promise<T>): Promise<T | undefined> {
+  state.loading = true;
+  state.error = undefined;
+  render();
+
+  try {
+    return await task();
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : String(error);
+    stopPlayback();
+    render();
+    return undefined;
+  } finally {
+    state.loading = false;
+    render();
+  }
+}
+
+async function loadSample(id: string): Promise<void> {
+  await withLoading(async () => {
+    const response = await fetch(getApiUrl(`./api/fixtures/${encodeURIComponent(id)}`));
+    if (!response.ok) {
+      throw new Error(`Failed to load fixture ${id}.`);
+    }
+
+    const payload = (await response.json()) as SerializedBattleData;
+    applyLoadedBattle(
+      {
+        metadata: payload.metadata,
+        events: payload.events,
+        snapshots: deserializeSnapshotMap(payload.snapshots),
+      },
+      `Sample ${id}`,
+    );
+  });
+}
+
+async function loadFolderFiles(files: Iterable<File>, sourceLabel: string): Promise<void> {
+  await withLoading(async () => {
+    const data = await loadBattleFromBrowserFiles(files);
+    applyLoadedBattle(data, sourceLabel);
+  });
+}
+
+async function collectFilesFromDirectoryHandle(
+  handle: any,
+  rootName: string,
+  prefix = "",
+): Promise<File[]> {
+  const collected: File[] = [];
+
+  for await (const [name, entry] of handle.entries()) {
+    const relativePath = prefix.length > 0 ? `${prefix}/${name}` : name;
+    if (entry.kind === "directory") {
+      collected.push(...(await collectFilesFromDirectoryHandle(entry, rootName, relativePath)));
+      continue;
+    }
+
+    const source = await entry.getFile();
+    const file = new File([await source.arrayBuffer()], source.name, {
+      type: source.type,
+      lastModified: source.lastModified,
+    });
+    Object.defineProperty(file, "webkitRelativePath", {
+      configurable: true,
+      value: `${rootName}/${relativePath}`,
+    });
+    collected.push(file);
   }
 
-  return powers.map((power) => `<span class="chip">${escapeHtml(power)}</span>`).join("");
+  return collected;
 }
 
-function renderHpBar(current: number, max: number): string {
-  const pct = max > 0 ? Math.min(100, Math.max(0, (current / max) * 100)) : 0;
-  return `<div class="hp-bar-track">
-    <div class="hp-bar-fill" style="width:${pct}%"></div>
-    <span class="hp-bar-text">${current}/${max}</span>
-  </div>`;
-}
-
-function renderPlayerUnit(frame: ViewerFrame): string {
-  const player = [...frame.state.entities.values()].find((entity) => entity.side === "player");
-  if (!player) {
-    return `<div class="actor actor-player missing">No player entity.</div>`;
+async function openDirectoryPicker(): Promise<void> {
+  const picker = (window as Window & { showDirectoryPicker?: () => Promise<any> }).showDirectoryPicker;
+  if (!picker) {
+    const input = document.getElementById("battle-folder-input") as HTMLInputElement | null;
+    input?.click();
+    return;
   }
 
-  const powers = formatPowers(player.powers);
-  return `<div class="actor actor-player ${player.alive ? "" : "dead"}">
-    <div class="actor-portrait">
-      <div class="actor-badge">${escapeHtml((player.name ?? "P").slice(0, 1))}</div>
-    </div>
-    <div class="actor-name">${escapeHtml(player.name ?? player.entity_id)}</div>
-    <div class="actor-hp-bar">${renderHpBar(player.current_hp, player.max_hp)}</div>
-    <div class="actor-stats-row">
-      ${player.block > 0 ? `<div class="stat-block shield-stat"><span class="stat-icon">\uD83D\uDEE1\uFE0F</span><span>${player.block}</span></div>` : ""}
-      <div class="stat-block energy-stat"><span class="stat-icon">\u26A1</span><span>${player.energy ?? 0}/3</span></div>
-    </div>
-    <div class="actor-powers">${renderPowerPills(powers)}</div>
-  </div>`;
+  await withLoading(async () => {
+    const handle = await picker();
+    const files = await collectFilesFromDirectoryHandle(handle, handle.name);
+    const data = await loadBattleFromBrowserFiles(files);
+    applyLoadedBattle(data, `Folder ${handle.name}`);
+  });
 }
 
-function renderEnemyCard(enemy: { name: string; entity_id: string; current_hp: number; max_hp: number; block: number; alive: boolean; powers: Record<string, PowerState>; intent?: IntentState }): string {
-  const powers = formatPowers(enemy.powers);
-  const intentClass = getIntentClass(enemy.intent);
-  return `<div class="enemy-card ${enemy.alive ? "" : "dead"}">
-    <div class="intent-banner ${intentClass}">
-      <span class="intent-icon">${getIntentIcon(enemy.intent)}</span>
-      <span>${escapeHtml(formatIntent(enemy.intent))}</span>
-    </div>
-    <div class="enemy-portrait">
-      <div class="actor-badge">${escapeHtml((enemy.name ?? "E").slice(0, 1))}</div>
-    </div>
-    <div class="enemy-name ${enemy.alive ? "" : "strikethrough"}">${escapeHtml(enemy.name ?? enemy.entity_id)}</div>
-    <div class="enemy-hp-bar">${renderHpBar(enemy.current_hp, enemy.max_hp)}</div>
-    ${enemy.block > 0 ? `<div class="enemy-block"><span class="block-icon">\uD83D\uDEE1\uFE0F</span> ${enemy.block}</div>` : ""}
-    <div class="enemy-powers">${renderPowerPills(powers)}</div>
-    ${!enemy.alive ? `<div class="death-overlay">[DEAD]</div>` : ""}
-  </div>`;
+function getCurrentFrame(): ViewerFrame | undefined {
+  if (!state.loaded || state.currentSeq === undefined) {
+    return undefined;
+  }
+  return getFrameAtSeq(state.loaded.model, state.currentSeq);
 }
 
-function renderEnemyUnits(frame: ViewerFrame): string {
-  const enemies = [...frame.state.entities.values()]
-    .filter((entity) => entity.side === "enemy")
-    .sort((left, right) => left.entity_id.localeCompare(right.entity_id));
-
-  if (enemies.length === 0) {
-    return `<div class="enemy-row"><div class="actor actor-enemy missing">No enemies.</div></div>`;
+function setCurrentSeq(nextSeq: number | undefined): void {
+  if (!state.loaded || nextSeq === undefined) {
+    return;
   }
 
-  return `<div class="enemy-row">${enemies.map(renderEnemyCard).join("")}</div>`;
+  if (!state.loaded.model.event_index_by_seq.has(nextSeq)) {
+    return;
+  }
+
+  state.currentSeq = nextSeq;
+  render();
 }
 
-function renderZoneSummary(frame: ViewerFrame): string {
-  const handCount = frame.state.zones.hand?.length ?? 0;
-  const drawCount = frame.state.zones.draw?.length ?? 0;
-  const discardCount = frame.state.zones.discard?.length ?? 0;
-  const exhaustCount = frame.state.zones.exhaust?.length ?? 0;
-  const playCount = frame.state.zones.play?.length ?? 0;
-  return `<div class="zone-line mono">Draw: ${drawCount} | Hand: ${handCount} | Discard: ${discardCount} | Exhaust: ${exhaustCount} | Play: ${playCount}</div>`;
+function getMarkerIndexBySeq(values: number[], seq: number): number {
+  let currentIndex = -1;
+  for (let index = 0; index < values.length; index++) {
+    if (values[index] <= seq) {
+      currentIndex = index;
+    } else {
+      break;
+    }
+  }
+  return currentIndex;
 }
 
-function getHandLayoutClass(handCount: number): string {
-  if (handCount >= 16) return "ultra-compact";
-  if (handCount >= 11) return "compact";
-  return "";
+function stepEvent(direction: "prev" | "next"): void {
+  if (!state.loaded || state.currentSeq === undefined) {
+    return;
+  }
+
+  const seq =
+    direction === "prev"
+      ? findPreviousSeq(state.loaded.model.event_seqs, state.currentSeq)
+      : findNextSeq(state.loaded.model.event_seqs, state.currentSeq);
+  setCurrentSeq(seq);
+}
+
+function stepAction(direction: "prev" | "next"): void {
+  if (!state.loaded || state.currentSeq === undefined) {
+    return;
+  }
+
+  const actionTargets = state.loaded.model.root_action_markers.map((marker) => marker.end_seq);
+  if (actionTargets.length === 0) {
+    return;
+  }
+
+  const currentIndex = getMarkerIndexBySeq(actionTargets, state.currentSeq);
+  if (direction === "prev") {
+    const targetIndex = currentIndex <= 0 ? 0 : currentIndex - 1;
+    setCurrentSeq(actionTargets[targetIndex]);
+    return;
+  }
+
+  const targetIndex = currentIndex < 0 ? 0 : Math.min(actionTargets.length - 1, currentIndex + 1);
+  if (targetIndex === currentIndex && state.currentSeq === actionTargets[targetIndex]) {
+    return;
+  }
+  setCurrentSeq(actionTargets[targetIndex]);
+}
+
+function stepTurn(direction: "prev" | "next"): void {
+  if (!state.loaded || state.currentSeq === undefined) {
+    return;
+  }
+
+  const turnTargets = state.loaded.model.turn_start_markers.map((marker) => marker.seq);
+  if (turnTargets.length === 0) {
+    return;
+  }
+
+  const currentIndex = getMarkerIndexBySeq(turnTargets, state.currentSeq);
+  if (direction === "prev") {
+    const targetIndex = currentIndex <= 0 ? 0 : currentIndex - 1;
+    setCurrentSeq(turnTargets[targetIndex]);
+    return;
+  }
+
+  const targetIndex = currentIndex < 0 ? 0 : Math.min(turnTargets.length - 1, currentIndex + 1);
+  if (targetIndex === currentIndex && state.currentSeq === turnTargets[targetIndex]) {
+    return;
+  }
+  setCurrentSeq(turnTargets[targetIndex]);
+}
+
+function advancePlayback(): void {
+  if (!state.loaded || state.currentSeq === undefined) {
+    stopPlayback();
+    render();
+    return;
+  }
+
+  const current = state.currentSeq;
+  const nextSeq =
+    state.playMode === "event"
+      ? findNextSeq(state.loaded.model.event_seqs, current)
+      : (() => {
+          const targets = state.loaded.model.root_action_markers.map((marker) => marker.end_seq);
+          const currentIndex = getMarkerIndexBySeq(targets, current);
+          if (targets.length === 0) {
+            return undefined;
+          }
+          const nextIndex = currentIndex < 0 ? 0 : currentIndex + 1;
+          return targets[nextIndex];
+        })();
+
+  if (nextSeq === undefined) {
+    stopPlayback();
+    render();
+    return;
+  }
+
+  state.currentSeq = nextSeq;
+  render();
+}
+
+function togglePlayback(): void {
+  if (state.isPlaying) {
+    stopPlayback();
+    render();
+    return;
+  }
+
+  if (!state.loaded) {
+    return;
+  }
+
+  stopPlayback();
+  state.isPlaying = true;
+  state.playTimer = window.setInterval(advancePlayback, state.playSpeedMs);
+  render();
+}
+
+function renderBadges(badges: BattleOverview["badges"]): string {
+  if (badges.length === 0) {
+    return "";
+  }
+
+  return `<div class="badge-row">${badges
+    .map(
+      (badge) =>
+        `<span class="badge tone-${escapeHtml(badge.tone)}">${escapeHtml(badge.label)}</span>`,
+    )
+    .join("")}</div>`;
+}
+
+function renderStats(stats: BattleOverview["stats"]): string {
+  return `<div class="stat-row">${stats
+    .map(
+      (stat) =>
+        `<span class="stat-pill"><strong>${escapeHtml(stat.value)}</strong>&nbsp;${escapeHtml(stat.label)}</span>`,
+    )
+    .join("")}</div>`;
+}
+
+function renderWarnings(alerts: ViewerAlert[]): string {
+  if (alerts.length === 0) {
+    return "";
+  }
+
+  return `<section class="warning-stack">${alerts
+    .map(
+      (alert) => `<article class="surface warning-card tone-${escapeHtml(alert.tone)}">
+        <h3>${escapeHtml(alert.title)}</h3>
+        <p>${escapeHtml(alert.message)}</p>
+      </article>`,
+    )
+    .join("")}</section>`;
+}
+
+function getBarPercent(current: number, max: number): number {
+  if (max <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, (current / max) * 100));
+}
+
+function renderPowerChips(powers: Record<string, PowerState>): string {
+  const entries = Object.values(powers).sort((left, right) => {
+    const leftLabel = left.power_name ?? left.power_id;
+    const rightLabel = right.power_name ?? right.power_id;
+    return leftLabel.localeCompare(rightLabel);
+  });
+
+  if (entries.length === 0) {
+    return `<span class="mini-pill">No powers</span>`;
+  }
+
+  return entries
+    .map(
+      (power) =>
+        `<span class="mini-pill">${escapeHtml(power.power_name ?? power.power_id)} ${escapeHtml(
+          String(power.stacks),
+        )}</span>`,
+    )
+    .join("");
+}
+
+function renderOrbChips(orbs: EntityState["orbs"]): string {
+  if (!orbs || orbs.length === 0) {
+    return `<span class="mini-pill">No orbs</span>`;
+  }
+
+  return orbs
+    .map(
+      (orb) =>
+        `<span class="mini-pill">${escapeHtml(labelOrb(orb))} · slot ${escapeHtml(
+          String(orb.slot_index),
+        )}</span>`,
+    )
+    .join("");
+}
+
+function renderRelicChips(relics: RelicState[] | undefined): string {
+  if (!relics || relics.length === 0) {
+    return `<span class="mini-pill">No relics</span>`;
+  }
+
+  return relics
+    .map(
+      (relic) =>
+        `<span class="mini-pill">${escapeHtml(labelRelic(relic))}${
+          relic.stack_count > 1 ? ` · ${escapeHtml(String(relic.stack_count))}` : ""
+        }</span>`,
+    )
+    .join("");
+}
+
+function renderResourcePills(entity: EntityState): string {
+  const extras = Object.entries(entity.resources ?? {}).map(
+    ([resourceId, amount]) =>
+      `<span class="mini-pill">${escapeHtml(resourceId)} ${escapeHtml(String(amount))}</span>`,
+  );
+
+  return [
+    entity.block > 0
+      ? `<span class="mini-pill is-block">Block ${escapeHtml(String(entity.block))}</span>`
+      : "",
+    `<span class="mini-pill is-energy">Energy ${escapeHtml(String(entity.energy ?? 0))}</span>`,
+    ...extras,
+    !entity.alive ? `<span class="mini-pill is-dead">Dead</span>` : "",
+  ]
+    .filter(Boolean)
+    .join("");
+}
+
+function renderEnemyCard(enemy: EntityState): string {
+  return `<article class="enemy-card ${enemy.alive ? "" : "is-dead"}">
+    <div class="enemy-top">
+      <div>
+        <div class="enemy-name">${escapeHtml(labelEntity(enemy))}</div>
+        <div class="enemy-subline mono">${escapeHtml(enemy.entity_id)}</div>
+      </div>
+      <span class="intent-chip">${escapeHtml(formatIntent(enemy.intent))}</span>
+    </div>
+    <div class="hp-bar"><div class="hp-fill" style="width:${getBarPercent(
+      enemy.current_hp,
+      enemy.max_hp,
+    )}%"></div></div>
+    <div class="hp-copy">${escapeHtml(String(enemy.current_hp))}/${escapeHtml(
+      String(enemy.max_hp),
+    )} HP</div>
+    <div class="mini-row">${renderResourcePills(enemy)}</div>
+    <div class="mini-row">${renderPowerChips(enemy.powers)}</div>
+  </article>`;
+}
+
+function renderPlayerCard(player: EntityState): string {
+  return `<article class="actor-card ${player.alive ? "" : "is-dead"}">
+    <div class="actor-top">
+      <div>
+        <div class="actor-name">${escapeHtml(labelEntity(player))}</div>
+        <div class="actor-subline mono">${escapeHtml(player.entity_id)}</div>
+      </div>
+      <span class="intent-chip">${escapeHtml(player.alive ? "Player" : "Defeated")}</span>
+    </div>
+    <div class="hp-bar"><div class="hp-fill" style="width:${getBarPercent(
+      player.current_hp,
+      player.max_hp,
+    )}%"></div></div>
+    <div class="hp-copy">${escapeHtml(String(player.current_hp))}/${escapeHtml(
+      String(player.max_hp),
+    )} HP</div>
+    <div class="mini-row">${renderResourcePills(player)}</div>
+    <div class="mini-row">${renderPowerChips(player.powers)}</div>
+  </article>`;
+}
+
+function renderCardTags(card: CardInstanceState): string {
+  const tags: string[] = [];
+  if (card.created_this_combat) {
+    tags.push("Created");
+  }
+  if (card.temporary) {
+    tags.push("Temporary");
+  }
+  if (card.current_upgrade_level !== undefined && card.current_upgrade_level > 0) {
+    tags.push(`Upgrade ${card.current_upgrade_level}`);
+  }
+
+  if (tags.length === 0) {
+    tags.push(card.zone);
+  }
+
+  return tags.map((tag) => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join("");
 }
 
 function renderHand(frame: ViewerFrame): string {
   const handIds = frame.state.zones.hand ?? [];
   if (handIds.length === 0) {
-    return `<div class="hand-empty">Current hand is empty.</div>`;
+    return `<div class="hand-empty">Hand is empty at this step.</div>`;
   }
 
-  const handLayoutClass = getHandLayoutClass(handIds.length);
-  return handIds
-    .map((cardId, index) => {
+  return `<div class="hand-grid">${handIds
+    .map((cardId) => {
       const card = frame.state.cards.get(cardId);
-      const title = card?.card_name ?? card?.card_def_id ?? cardId;
-      const cost = card?.cost;
-      const defId = card?.card_def_id ?? "unknown";
-      const cardType = getCardType(defId);
-      const tags: string[] = [];
-      if (card?.created_this_combat) tags.push("created");
-      if (card?.temporary) tags.push("temporary");
-      return `<div class="hand-card ${handLayoutClass} card-type-${cardType}" style="--card-rotate:${(index - (handIds.length - 1) / 2) * 2.2}deg;">
-        <div class="hand-card-cost">${cost ?? "?"}</div>
-        <div class="hand-card-title">${escapeHtml(title)}</div>
-        <div class="hand-card-def mono">${escapeHtml(defId)}</div>
-        <div class="hand-card-id mono">${escapeHtml(cardId)}</div>
-        <div class="hand-card-tags">${tags.length > 0 ? tags.map((tag) => `<span class="mini-chip">${escapeHtml(tag)}</span>`).join("") : `<span class="mini-chip muted-fill">stable</span>`}</div>
-      </div>`;
+      if (!card) {
+        return `<article class="hand-card">
+          <div class="card-cost">?</div>
+          <div class="card-title">${escapeHtml(cardId)}</div>
+          <div class="card-meta mono">${escapeHtml(cardId)}</div>
+          <div class="chip-row"><span class="tag-chip">Unknown card</span></div>
+        </article>`;
+      }
+
+      return `<article class="hand-card">
+        <div class="card-cost">${escapeHtml(card.cost !== undefined ? String(card.cost) : "?")}</div>
+        <div class="card-title">${escapeHtml(labelCard(card))}</div>
+        <div class="card-meta">${escapeHtml(card.card_def_id)}<br /><span class="mono">${escapeHtml(
+          card.card_instance_id,
+        )}</span></div>
+        <div class="chip-row">${renderCardTags(card)}</div>
+      </article>`;
     })
-    .join("");
+    .join("")}</div>`;
 }
 
-function renderPotions(frame: ViewerFrame): string {
-  const potions = [...frame.state.potions.values()].sort((left, right) => left.slot_index - right.slot_index);
-  if (potions.length === 0) {
-    return `<div class="chip muted-fill">No Potions</div>`;
+function getZonePreview(
+  zoneName: string,
+  cardIds: string[],
+  cards: Map<string, CardInstanceState>,
+): string {
+  if (cardIds.length === 0) {
+    return "Empty.";
   }
 
-  return potions
-    .map((potion) => {
-      const label = potion.potion_name ?? potion.potion_def_id;
-      return `<div class="potion-slot ${escapeHtml(potion.state)}">
-        <div class="potion-slot-index mono">${potion.slot_index}</div>
-        <div>
-          <div>${escapeHtml(label)}</div>
-          <div class="muted mono">${escapeHtml(potion.state)}</div>
-        </div>
-      </div>`;
-    })
-    .join("");
+  const preview = cardIds
+    .slice(0, 3)
+    .map((cardId) => labelCard(cards.get(cardId), cardId))
+    .join(", ");
+  const remainder = cardIds.length > 3 ? ` +${cardIds.length - 3} more` : "";
+  return `${preview}${remainder}.`;
 }
 
-function renderResolutionPath(path: ResolutionNode[]): string {
-  if (path.length === 0) {
-    return `<div class="debug-card">No active resolution on this frame.</div>`;
-  }
+function renderZoneGrid(frame: ViewerFrame): string {
+  const orderedZoneNames = ["draw", "discard", "play", "exhaust", "limbo", "reveal", "void", "removed", "unknown"];
+  const zoneEntries = orderedZoneNames
+    .map((zoneName) => ({
+      zoneName,
+      cards: frame.state.zones[zoneName] ?? [],
+    }))
+    .filter((entry) => entry.cards.length > 0 || ["draw", "discard", "play", "exhaust"].includes(entry.zoneName));
 
-  return path
-    .map((node, index) => {
-      const firstEvent = node.events[0];
-      return `<div class="debug-card">
-        <div class="debug-card-title">${index === 0 ? "Root" : `Nested ${index}`}: ${escapeHtml(node.resolution_id)}</div>
-        <div>${escapeHtml(firstEvent ? formatEventSummary(firstEvent) : "resolution")}</div>
-        ${
-          node.trigger
-            ? `<div class="muted">trigger ${escapeHtml(node.trigger.trigger_type)} @ seq ${node.trigger.event_seq}</div>`
-            : ""
-        }
-      </div>`;
-    })
-    .join("");
-}
-
-function renderEventWindow(model: ViewerBattleModel, currentSeq: number): string {
-  const index = model.event_index_by_seq.get(currentSeq);
-  if (index === undefined) {
-    return "";
-  }
-
-  const start = Math.max(0, index - 4);
-  const end = Math.min(model.events.length, index + 5);
-  return model.events
-    .slice(start, end)
-    .map((event) => {
-      const activeClass = event.seq === currentSeq ? "active" : "";
-      return `<button class="event-line ${activeClass}" data-jump-seq="${event.seq}">
-        ${escapeHtml(formatEventSummary(event))}
-      </button>`;
-    })
-    .join("");
-}
-
-function renderRootRail(model: ViewerBattleModel, frame: ViewerFrame): string {
-  if (model.root_action_markers.length === 0) {
-    return `<div class="debug-card">No root actions.</div>`;
-  }
-
-  return model.root_action_markers
-    .map((marker) => {
-      const active =
-        frame.current_root_action?.resolution_id === marker.resolution_id ? "active" : "";
-      return `<button class="timeline-stop ${active}" data-jump-seq="${marker.end_seq}">
-        <div class="timeline-stop-title">${escapeHtml(marker.resolution_id)}</div>
-        <div class="muted">${escapeHtml(marker.label)}</div>
-        <div class="mono">${marker.start_seq}-${marker.end_seq}</div>
-      </button>`;
-    })
-    .join("");
-}
-
-function renderLoadedViewer(model: ViewerBattleModel, frame: ViewerFrame): string {
-  const battleName =
-    model.metadata.battle.encounter_name ?? model.metadata.battle.encounter_id;
-  const currentEventSummary = formatEventSummary(frame.event);
-  const rootStops = model.root_action_markers.map((marker) => marker.end_seq);
-  const turnStops = model.turn_start_markers.map((marker) => marker.seq);
-  const prevRoot = findPreviousSeq(rootStops, frame.seq);
-  const nextRoot = findNextSeq(rootStops, frame.seq);
-  const prevTurn = findPreviousSeq(turnStops, frame.seq);
-  const nextTurn = findNextSeq(turnStops, frame.seq);
-  const prevEvent = findPreviousSeq(model.event_seqs, frame.seq);
-  const nextEvent = findNextSeq(model.event_seqs, frame.seq);
-  const snapshotOptions = model.snapshot_markers
-    .map((marker) => `<option value="${marker.seq}">seq ${marker.seq}</option>`)
-    .join("");
-  const turnOptions = model.turn_start_markers
+  return `<section class="zone-grid">${zoneEntries
     .map(
-      (marker) =>
-        `<option value="${marker.seq}">Turn ${marker.turn_index} @ seq ${marker.seq} (${marker.active_side})</option>`,
+      (entry) => `<article class="zone-card">
+        <h3 class="zone-title">${escapeHtml(entry.zoneName)}</h3>
+        <div class="zone-copy">${escapeHtml(String(entry.cards.length))} cards</div>
+        <div class="zone-copy">${escapeHtml(
+          getZonePreview(entry.zoneName, entry.cards, frame.state.cards),
+        )}</div>
+      </article>`,
     )
-    .join("");
+    .join("")}</section>`;
+}
 
-  const speedOptions = [
-    { label: "0.5x", ms: 2000 },
-    { label: "1x", ms: 1000 },
-    { label: "2x", ms: 500 },
-    { label: "4x", ms: 200 },
-  ];
+function renderResourceCards(frame: ViewerFrame): string {
+  const player = [...frame.state.entities.values()].find((entity) => entity.side === "player");
+  const potionEntries = [...frame.state.potions.values()].sort(
+    (left, right) => left.slot_index - right.slot_index,
+  );
 
-  return `
-    <div class="viewer-shell">
+  return `<section class="resource-grid">
+    <article class="resource-card">
+      <h3 class="resource-title">Potions</h3>
+      <div class="chip-row">${
+        potionEntries.length > 0
+          ? potionEntries
+              .map(
+                (potion) =>
+                  `<span class="mini-pill">${escapeHtml(labelPotion(potion))} · slot ${escapeHtml(
+                    String(potion.slot_index),
+                  )} · ${escapeHtml(potion.state)}</span>`,
+              )
+              .join("")
+          : `<span class="mini-pill">No potions</span>`
+      }</div>
+    </article>
+    <article class="resource-card">
+      <h3 class="resource-title">Player Orbs</h3>
+      <div class="chip-row">${player ? renderOrbChips(player.orbs) : `<span class="mini-pill">No player</span>`}</div>
+    </article>
+    <article class="resource-card">
+      <h3 class="resource-title">Player Relics</h3>
+      <div class="chip-row">${player ? renderRelicChips(player.relics) : `<span class="mini-pill">No player</span>`}</div>
+    </article>
+  </section>`;
+}
 
-      <!-- TOP STATUS BAR -->
-      <header class="topbar">
-        <div class="topbar-left">
-          <div class="player-status">
-            <div class="portrait-circle player-portrait-lg">
-              ${(() => {
-                const p = [...frame.state.entities.values()].find(e => e.side === "player");
-                return escapeHtml((p?.name ?? "P").slice(0, 1));
-              })()}
-            </div>
-            <div class="status-group">
-              <div class="hp-display">\u2764\uFE0F ${(() => {
-                const p = [...frame.state.entities.values()].find(e => e.side === "player");
-                return p ? `${p.current_hp}/${p.max_hp}` : "?/?";
-              })()}</div>
-              <div class="energy-gem">\u26A1 ${(() => {
-                const p = [...frame.state.entities.values()].find(e => e.side === "player");
-                return p ? `${p.energy ?? 0}/3` : "?/?";
-              })()}</div>
-              ${(() => {
-                const p = [...frame.state.entities.values()].find(e => e.side === "player");
-                return p && p.block > 0 ? `<div class="block-indicator">\uD83D\uDEE1\uFE0F ${p.block}</div>` : "";
-              })()}
-            </div>
-          </div>
+function renderArena(frame: ViewerFrame): string {
+  const entities = [...frame.state.entities.values()];
+  const player = entities.find((entity) => entity.side === "player");
+  const enemies = entities
+    .filter((entity) => entity.side === "enemy")
+    .sort((left, right) => left.entity_id.localeCompare(right.entity_id));
+
+  return `<section class="arena">
+    <section class="enemy-grid">${
+      enemies.length > 0
+        ? enemies.map(renderEnemyCard).join("")
+        : `<article class="enemy-card"><div class="enemy-name">No enemies</div><div class="enemy-subline">This frame has no active enemies.</div></article>`
+    }</section>
+    ${player ? renderPlayerCard(player) : `<article class="actor-card"><div class="actor-name">No player entity</div></article>`}
+    ${renderResourceCards(frame)}
+    ${renderZoneGrid(frame)}
+    <section class="hand-panel">
+      <div class="hand-header">
+        <div>
+          <h3 class="surface-title">Hand</h3>
+          <div class="surface-note">${escapeHtml(String((frame.state.zones.hand ?? []).length))} visible cards</div>
         </div>
-        <div class="topbar-center">
-          <div class="turn-indicator">Turn ${frame.state.turn_index} \u2014 ${escapeHtml(frame.state.active_side === "enemy" ? "Enemy" : "Player")}</div>
-          <div class="encounter-name">${escapeHtml(battleName)}</div>
-          <div class="seq-counter mono">seq ${frame.seq} / ${model.event_seqs[model.event_seqs.length - 1] ?? frame.seq}</div>
-        </div>
-        <div class="topbar-right">
-          <div class="loader-card">
-            <label class="control-label" for="fixture-select">Fixture</label>
-            <div class="toolbar-row">
-              <select id="fixture-select"></select>
-              <button id="load-fixture">Load</button>
-            </div>
-          </div>
-          <div class="loader-card">
-            <label class="control-label" for="folder-input">Battle Folder</label>
-            <input id="folder-input" type="file" webkitdirectory directory multiple />
-          </div>
-        </div>
-      </header>
+        <div class="surface-note mono">Turn ${escapeHtml(String(frame.state.turn_index))}</div>
+      </div>
+      ${renderHand(frame)}
+    </section>
+  </section>`;
+}
 
-      <!-- MAIN BATTLE ARENA -->
-      <section class="battle-scene">
-        <div class="scene-backdrop">
-          <!-- LEFT HUD -->
-          <div class="scene-hud left-hud">
-            <div class="hud-card">
-              <div class="hud-label">Current Action</div>
-              <div class="hud-value">${escapeHtml(frame.current_root_action?.label ?? "No active root action")}</div>
-            </div>
-            <div class="hud-card">
-              <div class="hud-label">Current Event</div>
-              <div class="hud-value mono small">${escapeHtml(currentEventSummary)}</div>
-            </div>
-            <div class="hud-card">
-              <div class="hud-label">Potions</div>
-              <div class="potion-grid">${renderPotions(frame)}</div>
-            </div>
-          </div>
+function renderTimeline(frame: ViewerFrame, loaded: LoadedBattleState): string {
+  return `<div class="timeline-list">${loaded.model.root_action_markers
+    .map((marker, index) => {
+      const isActive = frame.current_root_action?.resolution_id === marker.resolution_id;
+      return `<button class="timeline-item ${isActive ? "is-active" : ""}" data-command="jump-seq" data-seq="${marker.end_seq}">
+        <div class="timeline-overline">Action ${index + 1} · seq ${marker.start_seq}-${marker.end_seq}</div>
+        <div class="timeline-title">${escapeHtml(loaded.actionLabels[index] ?? marker.label)}</div>
+        <div class="timeline-copy mono">${escapeHtml(marker.resolution_id)}</div>
+      </button>`;
+    })
+    .join("")}</div>`;
+}
 
-          <!-- COMBAT STAGE -->
-          <div class="combat-stage">
-            <div class="enemy-stage">
-              ${renderEnemyUnits(frame)}
-            </div>
-            <div class="middle-banner">
-              <span>${escapeHtml(frame.state.active_side === "enemy" ? "Enemy Turn" : "Player Turn")}</span>
-            </div>
-            <div class="player-stage">
-              ${renderPlayerUnit(frame)}
-            </div>
-          </div>
+function renderJumpSections(frame: ViewerFrame, loaded: LoadedBattleState): string {
+  const turnSeqs = loaded.model.turn_start_markers.map((marker) => marker.seq);
+  const snapshotSeqs = loaded.model.snapshot_markers.map((marker) => marker.seq);
 
-          <!-- RIGHT HUD -->
-          <div class="scene-hud right-hud">
-            <div class="hud-card">
-              <div class="hud-label">Zones</div>
-              ${renderZoneSummary(frame)}
-            </div>
-            <div class="hud-card">
-              <div class="hud-label">Replay Base</div>
-              <div class="hud-value small">${escapeHtml(frame.source_snapshot_seq !== undefined ? `snapshot ${frame.source_snapshot_seq}` : "full replay")}</div>
-            </div>
-            <div class="hud-card">
-              <div class="hud-label">Status</div>
-              <div class="${state.error ? "error-text" : ""} hud-value small">${escapeHtml(state.status)}</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- BOTTOM AREA -->
-        <div class="bottom-area">
-          <!-- CONTROL STRIP -->
-          <div class="control-strip">
-            <div class="nav-group">
-              <button id="prev-root" ${prevRoot === undefined ? "disabled" : ""}>\u00AB Prev Action</button>
-              <button id="next-root" ${nextRoot === undefined ? "disabled" : ""}>Next Action \u00BB</button>
-              <button id="prev-turn" ${prevTurn === undefined ? "disabled" : ""}>\u00AB Prev Turn</button>
-              <button id="next-turn" ${nextTurn === undefined ? "disabled" : ""}>Next Turn \u00BB</button>
-              <button id="prev-event" ${prevEvent === undefined ? "disabled" : ""}>\u00AB Prev Seq</button>
-              <button id="next-event" ${nextEvent === undefined ? "disabled" : ""}>Next Seq \u00BB</button>
-            </div>
-            <div class="jump-group">
-              <select id="snapshot-select">${snapshotOptions || `<option value="">No snapshots</option>`}</select>
-              <button id="jump-snapshot" ${model.snapshot_markers.length === 0 ? "disabled" : ""}>Jump</button>
-              <select id="turn-select">${turnOptions || `<option value="">No turn starts</option>`}</select>
-              <button id="jump-turn" ${model.turn_start_markers.length === 0 ? "disabled" : ""}>Jump</button>
-            </div>
-            <div class="autoplay-group">
-              <button id="btn-play" class="${state.isPlaying ? "playing" : ""}">${state.isPlaying ? "\u23F8 Pause" : "\u25B6 Play"}</button>
-              <div class="speed-selector">
-                ${speedOptions.map(opt => `<button class="speed-btn ${state.playSpeed === opt.ms ? "active" : ""}" data-speed="${opt.ms}">${opt.label}</button>`).join("")}
-              </div>
-            </div>
-          </div>
-
-          <!-- HAND TRAY -->
-          <div class="hand-tray">
-            <div class="hand-header">
-              <div>
-                <div class="eyebrow">Current Hand</div>
-                <strong>${(frame.state.zones.hand ?? []).length} Cards</strong>
-              </div>
-            </div>
-            <div class="hand-cards">${renderHand(frame)}</div>
-          </div>
-        </div>
-      </section>
-
-      <!-- TIMELINE PANEL -->
-      <section class="timeline-panel">
-        <details>
-          <summary>Action Timeline</summary>
-        <div class="timeline-rail">
-          ${renderRootRail(model, frame)}
-        </div>
-        </details>
-      </section>
-
-      <!-- DEBUG PANEL -->
-      <section class="debug-panel">
-        <details>
-          <summary>Debug Details</summary>
-          <div class="debug-grid">
-            <div class="debug-column">
-              <h3>Resolution Context</h3>
-              ${renderResolutionPath(frame.resolution_path)}
-            </div>
-            <div class="debug-column">
-              <h3>Nearby Events</h3>
-              <div class="event-window">${renderEventWindow(model, frame.seq)}</div>
-            </div>
-            <div class="debug-column">
-              <h3>Current Payload</h3>
-              <div class="debug-card"><pre>${escapeHtml(
-                JSON.stringify(frame.event.payload, null, 2),
-              )}</pre></div>
-            </div>
-          </div>
-        </details>
-      </section>
+  return `<div class="jump-list">
+    <div>
+      <div class="surface-header">
+        <h2 class="surface-title">Turn Jumps</h2>
+        <span class="surface-note">${escapeHtml(String(turnSeqs.length))} markers</span>
+      </div>
+      <div class="jump-row">${loaded.model.turn_start_markers
+        .map((marker) => {
+          const isActive = marker.seq === (turnSeqs[getMarkerIndexBySeq(turnSeqs, frame.seq)] ?? -1);
+          return `<button class="jump-item ${isActive ? "is-active" : ""}" data-command="jump-seq" data-seq="${marker.seq}">
+            <div class="jump-title">Turn ${marker.turn_index}</div>
+            <div class="jump-copy">${escapeHtml(marker.active_side)} · seq ${marker.seq}</div>
+          </button>`;
+        })
+        .join("")}</div>
     </div>
-  `;
+    <div>
+      <div class="surface-header">
+        <h2 class="surface-title">Snapshots</h2>
+        <span class="surface-note">${escapeHtml(String(snapshotSeqs.length))} restore points</span>
+      </div>
+      <div class="jump-row">${loaded.model.snapshot_markers
+        .map((marker) => {
+          const isActive = marker.seq === frame.source_snapshot_seq;
+          return `<button class="jump-item ${isActive ? "is-active" : ""}" data-command="jump-seq" data-seq="${marker.seq}">
+            <div class="jump-title">Snapshot ${marker.seq}</div>
+            <div class="jump-copy">${escapeHtml(marker.snapshot.phase)} · turn ${escapeHtml(
+              String(marker.snapshot.turn_index),
+            )}</div>
+          </button>`;
+        })
+        .join("")}</div>
+    </div>
+  </div>`;
 }
 
-async function fetchFixtures(): Promise<string[]> {
-  const response = await fetch("/api/fixtures");
-  if (!response.ok) {
-    throw new Error(`Failed to load fixture list: ${response.status}`);
-  }
-  return (await response.json()) as string[];
+function renderStepDetails(frame: ViewerFrame, loaded: LoadedBattleState): string {
+  const summary = buildStepSummary(frame);
+  const resolutionPath =
+    frame.resolution_path.length > 0
+      ? frame.resolution_path.map((node) => node.resolution_id).join(" → ")
+      : "No nested resolution path";
+
+  return `<section class="detail-stack">
+    <article class="detail-card">
+      <h2 class="detail-title">Current Step</h2>
+      <h3 class="detail-headline">${escapeHtml(summary.headline)}</h3>
+      <p class="detail-copy">${escapeHtml(summary.detail)}</p>
+      <div class="meta-pill-row">${summary.meta
+        .map((item) => `<span class="meta-pill">${escapeHtml(item)}</span>`)
+        .join("")}</div>
+    </article>
+    <article class="detail-card">
+      <h2 class="detail-title">Resolution Context</h2>
+      <div class="detail-copy">${escapeHtml(
+        frame.current_root_action
+          ? loaded.actionLabels[frame.current_root_action.index] ?? frame.current_root_action.label
+          : "No root action",
+      )}</div>
+      <div class="detail-copy mono">${escapeHtml(resolutionPath)}</div>
+    </article>
+    <article class="detail-card">
+      <h2 class="detail-title">Raw Event</h2>
+      <pre class="code-block">${escapeHtml(JSON.stringify(frame.event, null, 2))}</pre>
+    </article>
+  </section>`;
 }
 
-async function fetchFixtureBattle(name: string): Promise<ViewerBattleData> {
-  const response = await fetch(`/api/fixtures/${encodeURIComponent(name)}`);
-  if (!response.ok) {
-    throw new Error(`Failed to load fixture ${name}: ${response.status}`);
-  }
-
-  const payload = (await response.json()) as SerializedBattleData;
-  return {
-    metadata: payload.metadata,
-    events: payload.events,
-    snapshots: deserializeSnapshotMap(payload.snapshots),
-  };
-}
-
-function setLoadedBattle(data: ViewerBattleData): void {
-  stopAutoPlay();
-  const model = createViewerModel(data);
-  state.model = model;
-  state.currentSeq = getInitialSeq(model);
-  state.error = undefined;
-  state.status = `Loaded ${model.metadata.battle_id}`;
-  render();
-}
-
-function setError(message: string): void {
-  state.error = message;
-  state.status = message;
-  render();
-}
-
-function jumpToSeq(seq: number | undefined): void {
-  if (!state.model || seq === undefined) {
-    return;
-  }
-  state.currentSeq = seq;
-  state.error = undefined;
-  render();
-}
-
-function startAutoPlay(): void {
-  if (state.isPlaying || !state.model) return;
-  state.isPlaying = true;
-  state.playTimer = setInterval(() => {
-    if (!state.model || state.currentSeq === undefined) {
-      stopAutoPlay();
-      return;
-    }
-    const nextSeq = findNextSeq(state.model.event_seqs, state.currentSeq);
-    if (nextSeq === undefined) {
-      stopAutoPlay();
-      return;
-    }
-    state.currentSeq = nextSeq;
-    state.error = undefined;
-    render();
-  }, state.playSpeed);
-  render();
-}
-
-function stopAutoPlay(): void {
-  if (state.playTimer) {
-    clearInterval(state.playTimer);
-    state.playTimer = undefined;
-  }
-  state.isPlaying = false;
-}
-
-function toggleAutoPlay(): void {
-  if (state.isPlaying) {
-    stopAutoPlay();
-    render();
-  } else {
-    startAutoPlay();
-  }
-}
-
-function setPlaySpeed(ms: number): void {
-  state.playSpeed = ms;
-  if (state.isPlaying) {
-    stopAutoPlay();
-    startAutoPlay();
-  } else {
-    render();
-  }
-}
-
-function bindKeyboardShortcuts(): void {
-  document.addEventListener("keydown", (e) => {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
-
-    switch (e.key) {
-      case "ArrowLeft":
-        e.preventDefault();
-        if (e.shiftKey && state.model) {
-          const rootStops = state.model.root_action_markers.map(m => m.end_seq);
-          jumpToSeq(findPreviousSeq(rootStops, state.currentSeq ?? 0));
-        } else if (state.model) {
-          jumpToSeq(findPreviousSeq(state.model.event_seqs, state.currentSeq ?? 0));
-        }
-        break;
-      case "ArrowRight":
-        e.preventDefault();
-        if (e.shiftKey && state.model) {
-          const rootStops = state.model.root_action_markers.map(m => m.end_seq);
-          jumpToSeq(findNextSeq(rootStops, state.currentSeq ?? 0));
-        } else if (state.model) {
-          jumpToSeq(findNextSeq(state.model.event_seqs, state.currentSeq ?? 0));
-        }
-        break;
-      case "Home":
-        e.preventDefault();
-        if (state.model) jumpToSeq(state.model.event_seqs[0]);
-        break;
-      case "End":
-        e.preventDefault();
-        if (state.model) jumpToSeq(state.model.event_seqs[state.model.event_seqs.length - 1]);
-        break;
-      case " ":
-        e.preventDefault();
-        toggleAutoPlay();
-        break;
-    }
-  });
+function renderKeyMoments(frame: ViewerFrame, loaded: LoadedBattleState): string {
+  return `<div class="moments-list">${loaded.keyMoments
+    .map((moment) => {
+      const isActive = moment.seq === frame.seq;
+      return `<button class="moment-item ${isActive ? "is-active" : ""}" data-command="jump-seq" data-seq="${moment.seq}">
+        <div class="moment-overline">Seq ${moment.seq}</div>
+        <div class="moment-title">${escapeHtml(moment.label)}</div>
+        <div class="moment-copy">${escapeHtml(moment.detail)}</div>
+      </button>`;
+    })
+    .join("")}</div>`;
 }
 
 function renderEmptyState(): string {
-  return `
-    <div class="viewer-shell empty-shell">
-      <header class="topbar">
-        <div class="topbar-left"></div>
-        <div class="topbar-center">
-          <div class="eyebrow">STS2 Combat Replay Viewer</div>
-          <h1>Battle Scene Mode</h1>
-          <div class="muted">Load a battle to begin replay.</div>
+  return `<div class="viewer-shell">
+    <input id="battle-folder-input" class="hidden-input" type="file" webkitdirectory directory multiple />
+    <section class="surface hero">
+      <div class="hero-grid">
+        <div>
+          <p class="hero-kicker">Battle-Only Replay</p>
+          <h1 class="hero-title">STS2 Battle Replay</h1>
+          <p class="hero-copy">
+            This viewer rebuilds one battle container from <span class="mono">metadata.json</span>,
+            <span class="mono">events.ndjson</span>, and snapshots. Open a real recorder folder, or use a fixture while iterating locally.
+          </p>
+          <div class="hero-actions">
+            <button class="button-primary" data-command="open-folder-picker">
+              Open Battle Folder
+            </button>
+            <button class="button-secondary" data-command="open-folder-fallback">
+              Choose Folder Manually
+            </button>
+          </div>
+          <p class="hero-copy">${escapeHtml(
+            state.loading ? "Loading battle container…" : state.error ?? state.status,
+          )}</p>
         </div>
-        <div class="topbar-right">
-          <div class="loader-card">
-            <label class="control-label" for="fixture-select">Fixture</label>
-            <div class="toolbar-row">
-              <select id="fixture-select"></select>
-              <button id="load-fixture">Load</button>
+        <aside class="surface hero-meta">
+          <div class="hero-meta-grid">
+            <div class="hero-meta-row">
+              <div class="meta-label">What This Is</div>
+              <div class="meta-value">Tactical Replay, Not Game UI Emulation</div>
+              <div class="meta-copy">The viewer favors object traceability, event order, and state reconstruction over original animation fidelity.</div>
+            </div>
+            <div class="hero-meta-row">
+              <div class="meta-label">Open Battle Container</div>
+              <div class="meta-copy">
+                Expected contents: <span class="mono">metadata.json</span>, <span class="mono">events.ndjson</span>, and optional <span class="mono">snapshots/*.json</span>.
+              </div>
+            </div>
+            <div class="hero-meta-row">
+              <div class="meta-label">Keyboard</div>
+              <div class="meta-copy">Arrow keys step events. Shift + arrows step actions. Space toggles autoplay.</div>
             </div>
           </div>
-          <div class="loader-card">
-            <label class="control-label" for="folder-input">Battle Folder</label>
-            <input id="folder-input" type="file" webkitdirectory directory multiple />
+        </aside>
+      </div>
+    </section>
+    <section class="load-grid">
+      <article class="surface load-card">
+        <div class="surface-header">
+          <h2 class="surface-title">Folder Import</h2>
+          <span class="surface-note">Local-first</span>
+        </div>
+        <div class="load-card-body">
+          <div class="meta-copy">
+            Primary path for productized replay. On supported browsers the viewer uses the local folder picker directly; otherwise it falls back to a manual folder selection dialog.
+          </div>
+          <div class="hero-actions">
+            <button class="button-primary" data-command="open-folder-picker">Open Folder</button>
+            <button class="button-ghost" data-command="open-folder-fallback">Fallback Picker</button>
           </div>
         </div>
-      </header>
+      </article>
+      <article class="surface load-card">
+        <div class="surface-header">
+          <h2 class="surface-title">Fixture Samples</h2>
+          <span class="surface-note">${escapeHtml(String(state.fixtures.length))} available</span>
+        </div>
+        <div class="load-card-body">
+          ${
+            state.fixtures.length > 0
+              ? `<div class="sample-grid">${state.fixtures
+                  .map(
+                    (fixture) => `<button class="sample-card" data-command="load-sample" data-sample-id="${escapeHtml(
+                      fixture.id,
+                    )}">
+                      <div class="sample-title">${escapeHtml(fixture.label)}</div>
+                      <div class="sample-copy">${escapeHtml(
+                        fixture.note ?? "Load fixture from the local dev server.",
+                      )}</div>
+                    </button>`,
+                  )
+                  .join("")}</div>`
+              : `<div class="meta-copy">No fixture API detected. This is expected in the static build path.</div>`
+          }
+        </div>
+      </article>
+    </section>
+    <div class="footer-note">Viewer can open unknown events without crashing; unsupported events remain visible in the raw event pane.</div>
+  </div>`;
+}
 
-      <section class="empty-state-panel">
-        <div class="empty-state-copy">
-          <h2>Load a battle container</h2>
-          <p>The main view now prioritizes action-level forward/back navigation and a combat-scene layout. Fine-grained seq stepping stays in the debug section after load.</p>
-          <div class="status-line ${state.error ? "error-text" : ""}">${escapeHtml(state.status)}</div>
+function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): string {
+  return `<div class="viewer-shell">
+    <input id="battle-folder-input" class="hidden-input" type="file" webkitdirectory directory multiple />
+    <section class="shell-top">
+      <section class="surface summary-bar">
+        <div class="summary-main">
+          <h1 class="summary-title">${escapeHtml(loaded.overview.title)}</h1>
+          <div class="summary-subtitle">${escapeHtml(loaded.overview.subtitle)}</div>
+          <div class="summary-source">${escapeHtml(loaded.overview.source_line)}</div>
+          ${renderBadges(loaded.overview.badges)}
+          ${renderStats(loaded.overview.stats)}
+        </div>
+        <div class="summary-side">
+          <div class="status-copy">${escapeHtml(state.error ?? state.status)}</div>
+          <div class="hero-actions">
+            <button class="button-primary" data-command="open-folder-picker">Open Another Battle</button>
+            <button class="button-ghost" data-command="open-folder-fallback">Manual Folder</button>
+          </div>
         </div>
       </section>
-    </div>
-  `;
+      ${renderWarnings(loaded.alerts)}
+      <section class="surface controls-bar">
+        <div class="controls-group">
+          <button class="control-button" data-command="step-prev-turn">Prev Turn</button>
+          <button class="control-button" data-command="step-prev-action">Prev Action</button>
+          <button class="control-button" data-command="step-prev-event">Prev Event</button>
+          <button class="control-button is-primary" data-command="toggle-play">${
+            state.isPlaying ? "Pause" : "Play"
+          }</button>
+          <button class="control-button" data-command="step-next-event">Next Event</button>
+          <button class="control-button" data-command="step-next-action">Next Action</button>
+          <button class="control-button" data-command="step-next-turn">Next Turn</button>
+        </div>
+        <div class="controls-group">
+          <select id="play-mode" class="control-select">
+            <option value="action" ${state.playMode === "action" ? "selected" : ""}>Autoplay Actions</option>
+            <option value="event" ${state.playMode === "event" ? "selected" : ""}>Autoplay Events</option>
+          </select>
+          <select id="play-speed" class="control-select">
+            <option value="1500" ${state.playSpeedMs === 1500 ? "selected" : ""}>Slow</option>
+            <option value="900" ${state.playSpeedMs === 900 ? "selected" : ""}>Normal</option>
+            <option value="450" ${state.playSpeedMs === 450 ? "selected" : ""}>Fast</option>
+          </select>
+        </div>
+      </section>
+    </section>
+    <main class="workspace">
+      <aside class="surface panel scroll-panel">
+        ${renderJumpSections(frame, loaded)}
+        <div class="surface-header">
+          <h2 class="surface-title">Action Rail</h2>
+          <span class="surface-note">${escapeHtml(String(loaded.model.root_action_markers.length))} grouped roots</span>
+        </div>
+        ${renderTimeline(frame, loaded)}
+      </aside>
+      <section class="surface panel board-panel scroll-panel">
+        ${renderArena(frame)}
+      </section>
+      <aside class="surface panel scroll-panel">
+        ${renderStepDetails(frame, loaded)}
+        <div class="surface-header">
+          <h2 class="surface-title">Key Moments</h2>
+          <span class="surface-note">${escapeHtml(String(loaded.keyMoments.length))} selected events</span>
+        </div>
+        ${renderKeyMoments(frame, loaded)}
+      </aside>
+    </main>
+    <div class="footer-note">State at seq ${escapeHtml(String(frame.seq))} · battle ${escapeHtml(
+      loaded.model.metadata.battle_id,
+    )}</div>
+  </div>`;
 }
-
-let keyboardBound = false;
 
 function render(): void {
-  if (!state.model || state.currentSeq === undefined) {
+  const frame = getCurrentFrame();
+
+  if (!state.loaded || !frame) {
     root.innerHTML = renderEmptyState();
-    bindGlobalControls();
     return;
   }
 
-  const frame = getFrameAtSeq(state.model, state.currentSeq);
-  root.innerHTML = renderLoadedViewer(state.model, frame);
-  bindGlobalControls();
-  bindLoadedControls(frame);
-
-  if (!keyboardBound) {
-    bindKeyboardShortcuts();
-    keyboardBound = true;
-  }
+  root.innerHTML = renderLoadedState(state.loaded, frame);
 }
 
-function bindGlobalControls(): void {
-  const fixtureSelect = document.getElementById("fixture-select") as HTMLSelectElement | null;
-  const loadFixtureButton = document.getElementById("load-fixture");
-  const folderInput = document.getElementById("folder-input") as HTMLInputElement | null;
-
-  if (fixtureSelect) {
-    void fetchFixtures()
-      .then((fixtures) => {
-        fixtureSelect.innerHTML = fixtures
-          .map((fixture) => `<option value="${escapeHtml(fixture)}">${escapeHtml(fixture)}</option>`)
-          .join("");
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : String(err));
-      });
+function getClosestCommandTarget(target: EventTarget | null): HTMLElement | null {
+  if (!(target instanceof Element)) {
+    return null;
   }
-
-  loadFixtureButton?.addEventListener("click", () => {
-    if (!fixtureSelect || fixtureSelect.value.length === 0) {
-      return;
-    }
-
-    state.status = `Loading fixture ${fixtureSelect.value}...`;
-    state.error = undefined;
-    render();
-
-    void fetchFixtureBattle(fixtureSelect.value)
-      .then(setLoadedBattle)
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : String(err));
-      });
-  });
-
-  folderInput?.addEventListener("change", () => {
-    if (!folderInput.files || folderInput.files.length === 0) {
-      return;
-    }
-
-    state.status = "Loading selected battle folder...";
-    state.error = undefined;
-    render();
-
-    void loadBattleFromBrowserFiles(folderInput.files)
-      .then(setLoadedBattle)
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : String(err));
-      });
-  });
+  return target.closest("[data-command]");
 }
 
-function bindLoadedControls(frame: ViewerFrame): void {
-  const model = state.model;
-  if (!model) {
+root.addEventListener("click", (event) => {
+  const target = getClosestCommandTarget(event.target);
+  if (!target) {
     return;
   }
 
-  const rootStops = model.root_action_markers.map((marker) => marker.end_seq);
-  const turnStops = model.turn_start_markers.map((marker) => marker.seq);
+  const command = target.getAttribute("data-command");
+  if (!command) {
+    return;
+  }
 
-  document.getElementById("prev-root")?.addEventListener("click", () => {
-    jumpToSeq(findPreviousSeq(rootStops, frame.seq));
-  });
-  document.getElementById("next-root")?.addEventListener("click", () => {
-    jumpToSeq(findNextSeq(rootStops, frame.seq));
-  });
-  document.getElementById("prev-turn")?.addEventListener("click", () => {
-    jumpToSeq(findPreviousSeq(turnStops, frame.seq));
-  });
-  document.getElementById("next-turn")?.addEventListener("click", () => {
-    jumpToSeq(findNextSeq(turnStops, frame.seq));
-  });
-  document.getElementById("prev-event")?.addEventListener("click", () => {
-    jumpToSeq(findPreviousSeq(model.event_seqs, frame.seq));
-  });
-  document.getElementById("next-event")?.addEventListener("click", () => {
-    jumpToSeq(findNextSeq(model.event_seqs, frame.seq));
-  });
-  document.getElementById("jump-snapshot")?.addEventListener("click", () => {
-    const select = document.getElementById("snapshot-select") as HTMLSelectElement | null;
-    if (select?.value) {
-      jumpToSeq(parseInt(select.value, 10));
+  switch (command) {
+    case "open-folder-picker":
+      void openDirectoryPicker();
+      break;
+    case "open-folder-fallback": {
+      const input = document.getElementById("battle-folder-input") as HTMLInputElement | null;
+      input?.click();
+      break;
     }
-  });
-  document.getElementById("jump-turn")?.addEventListener("click", () => {
-    const select = document.getElementById("turn-select") as HTMLSelectElement | null;
-    if (select?.value) {
-      jumpToSeq(parseInt(select.value, 10));
-    }
-  });
-
-  document.getElementById("btn-play")?.addEventListener("click", () => {
-    toggleAutoPlay();
-  });
-
-  document.querySelectorAll<HTMLElement>(".speed-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const speed = parseInt(btn.dataset.speed ?? "1000", 10);
-      setPlaySpeed(speed);
-    });
-  });
-
-  document.querySelectorAll<HTMLElement>("[data-jump-seq]").forEach((element) => {
-    element.addEventListener("click", () => {
-      const rawSeq = element.dataset.jumpSeq;
-      if (!rawSeq) {
-        return;
+    case "load-sample": {
+      const sampleId = target.getAttribute("data-sample-id");
+      if (sampleId) {
+        void loadSample(sampleId);
       }
-      jumpToSeq(parseInt(rawSeq, 10));
-    });
-  });
-}
+      break;
+    }
+    case "jump-seq": {
+      const seqValue = target.getAttribute("data-seq");
+      if (seqValue) {
+        setCurrentSeq(Number.parseInt(seqValue, 10));
+      }
+      break;
+    }
+    case "step-prev-event":
+      stepEvent("prev");
+      break;
+    case "step-next-event":
+      stepEvent("next");
+      break;
+    case "step-prev-action":
+      stepAction("prev");
+      break;
+    case "step-next-action":
+      stepAction("next");
+      break;
+    case "step-prev-turn":
+      stepTurn("prev");
+      break;
+    case "step-next-turn":
+      stepTurn("next");
+      break;
+    case "toggle-play":
+      togglePlayback();
+      break;
+  }
+});
+
+root.addEventListener("change", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) {
+    return;
+  }
+
+  if (target.id === "battle-folder-input" && target instanceof HTMLInputElement && target.files) {
+    const files = [...target.files];
+    const firstPath = files[0]?.webkitRelativePath ?? files[0]?.name ?? "battle folder";
+    const label = firstPath.split("/")[0] || "battle folder";
+    void loadFolderFiles(files, `Folder ${label}`);
+    target.value = "";
+    return;
+  }
+
+  if (target.id === "play-speed" && target instanceof HTMLSelectElement) {
+    state.playSpeedMs = Number.parseInt(target.value, 10);
+    if (state.isPlaying) {
+      togglePlayback();
+      togglePlayback();
+    } else {
+      render();
+    }
+    return;
+  }
+
+  if (target.id === "play-mode" && target instanceof HTMLSelectElement) {
+    state.playMode = target.value === "event" ? "event" : "action";
+    render();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  const activeElement = document.activeElement;
+  if (
+    activeElement instanceof HTMLInputElement ||
+    activeElement instanceof HTMLSelectElement ||
+    activeElement instanceof HTMLTextAreaElement
+  ) {
+    return;
+  }
+
+  if (!state.loaded) {
+    return;
+  }
+
+  if (event.key === " ") {
+    event.preventDefault();
+    togglePlayback();
+    return;
+  }
+
+  if (event.key === "ArrowLeft" && event.shiftKey) {
+    event.preventDefault();
+    stepAction("prev");
+    return;
+  }
+
+  if (event.key === "ArrowRight" && event.shiftKey) {
+    event.preventDefault();
+    stepAction("next");
+    return;
+  }
+
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    stepEvent("prev");
+    return;
+  }
+
+  if (event.key === "ArrowRight") {
+    event.preventDefault();
+    stepEvent("next");
+  }
+});
 
 render();
+void loadFixtures();

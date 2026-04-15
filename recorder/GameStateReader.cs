@@ -198,6 +198,29 @@ public static class GameStateReader
         public int Cost;
     }
 
+    public struct CardVisibleFlagsInfo
+    {
+        public bool RetainThisTurn;
+        public bool SlyThisTurn;
+    }
+
+    public struct CardEnchantmentInfo
+    {
+        public string EnchantmentId;
+        public string Name;
+        public int Amount;
+        public string Status;
+        public int DisplayAmount;
+        public bool ShowAmount;
+    }
+
+    public struct CardAfflictionInfo
+    {
+        public string AfflictionId;
+        public string Name;
+        public int Amount;
+    }
+
     /// <summary>
     /// Read all cards across combat zones. Uses reflection to extract CardModel
     /// from potential wrapper types (CardInHand, etc.).
@@ -296,6 +319,143 @@ public static class GameStateReader
             return model.EnergyCost.GetAmountToSpend();
         }
         catch { return 0; }
+    }
+
+    public static int? GetVisibleStarCost(CardModel model)
+    {
+        try
+        {
+            if (model.HasStarCostX)
+            {
+                return 0;
+            }
+
+            var starCost = model.CurrentStarCost;
+            return starCost >= 0 ? starCost : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static int GetReplayCount(CardModel model)
+    {
+        try
+        {
+            return model.GetEnchantedReplayCount();
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    public static List<string> GetKeywords(CardModel model)
+    {
+        try
+        {
+            return model.Keywords
+                .Where(keyword => keyword != CardKeyword.None)
+                .Select(keyword => ToSnakeCase(keyword.ToString()))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(keyword => keyword, StringComparer.Ordinal)
+                .ToList();
+        }
+        catch
+        {
+            return new List<string>();
+        }
+    }
+
+    public static CardVisibleFlagsInfo GetVisibleFlags(CardModel model)
+    {
+        try
+        {
+            return new CardVisibleFlagsInfo
+            {
+                RetainThisTurn = model.ShouldRetainThisTurn,
+                SlyThisTurn = model.IsSlyThisTurn,
+            };
+        }
+        catch
+        {
+            return default;
+        }
+    }
+
+    public static bool TryGetEnchantmentInfo(CardModel model, out CardEnchantmentInfo info)
+    {
+        info = default;
+
+        try
+        {
+            var enchantment = model.Enchantment;
+            if (enchantment == null)
+            {
+                return false;
+            }
+
+            info = new CardEnchantmentInfo
+            {
+                EnchantmentId = enchantment.Id?.Entry ?? ToSnakeCase(enchantment.GetType().Name),
+                Name = SafeTitle(enchantment.Title) ?? enchantment.GetType().Name,
+                Amount = enchantment.Amount,
+                Status = ToSnakeCase(enchantment.Status.ToString()),
+                DisplayAmount = enchantment.DisplayAmount,
+                ShowAmount = enchantment.ShowAmount,
+            };
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool TryGetAfflictionInfo(CardModel model, out CardAfflictionInfo info)
+    {
+        info = default;
+
+        try
+        {
+            var affliction = model.Affliction;
+            if (affliction == null)
+            {
+                return false;
+            }
+
+            info = new CardAfflictionInfo
+            {
+                AfflictionId = affliction.Id?.Entry ?? ToSnakeCase(affliction.GetType().Name),
+                Name = SafeTitle(affliction.Title) ?? affliction.GetType().Name,
+                Amount = affliction.Amount,
+            };
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static Dictionary<string, int> GetDynamicValues(CardModel model)
+    {
+        var result = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        try
+        {
+            foreach (var entry in model.DynamicVars.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+            {
+                result[entry.Key] = entry.Value.IntValue;
+            }
+        }
+        catch
+        {
+            return new Dictionary<string, int>(StringComparer.Ordinal);
+        }
+
+        return result;
     }
 
     // ─── Potion helpers ─────────────────────────────────────────────────────

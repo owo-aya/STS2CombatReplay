@@ -21,6 +21,7 @@ using MegaCrit.Sts2.Core.Hooks;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Models.Cards;
 using MegaCrit.Sts2.Core.Models.Powers;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
@@ -46,28 +47,26 @@ public static class RecorderMod
         public int OldCost { get; }
     }
 
-    private readonly struct CardUpgradeMutationRecord
+    private readonly struct CardTruthMutationRecord
     {
-        public CardUpgradeMutationRecord(CardModel? card, int oldUpgradeLevel, bool oldUpgraded)
+        public CardTruthMutationRecord(CardModel? card, CardTruthStateSnapshot? oldState)
         {
             Card = card;
-            OldUpgradeLevel = oldUpgradeLevel;
-            OldUpgraded = oldUpgraded;
+            OldState = oldState;
         }
 
         public CardModel? Card { get; }
-        public int OldUpgradeLevel { get; }
-        public bool OldUpgraded { get; }
+        public CardTruthStateSnapshot? OldState { get; }
     }
 
-    private readonly struct CardUpgradeMutationState
+    private readonly struct CardTruthMutationState
     {
-        public CardUpgradeMutationState(IReadOnlyList<CardUpgradeMutationRecord> records)
+        public CardTruthMutationState(IReadOnlyList<CardTruthMutationRecord> records)
         {
             Records = records;
         }
 
-        public IReadOnlyList<CardUpgradeMutationRecord> Records { get; }
+        public IReadOnlyList<CardTruthMutationRecord> Records { get; }
     }
 
     private readonly struct OrbSlotsMutationState
@@ -456,6 +455,11 @@ public static class RecorderMod
                 AccessTools.Method(typeof(CardCmd), nameof(CardCmd.Upgrade), new[] { typeof(IEnumerable<CardModel>), typeof(CardPreviewStyle) }),
                 AccessTools.Method(typeof(RecorderMod), nameof(BeforeCardUpgrade)),
                 AccessTools.Method(typeof(RecorderMod), nameof(AfterCardUpgrade)));
+            ApplyPatch(harmony,
+                "CardCmd.Downgrade(CardModel)",
+                AccessTools.Method(typeof(CardCmd), nameof(CardCmd.Downgrade), new[] { typeof(CardModel) }),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeCardDowngrade)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterCardDowngrade)));
             ApplyCardEnergyCostMutationPatch(harmony, nameof(CardEnergyCost.SetUntilPlayed));
             ApplyCardEnergyCostMutationPatch(harmony, nameof(CardEnergyCost.SetThisTurnOrUntilPlayed));
             ApplyCardEnergyCostMutationPatch(harmony, nameof(CardEnergyCost.SetThisTurn));
@@ -468,6 +472,91 @@ public static class RecorderMod
             ApplyCardEnergyCostMutationPatch(harmony, nameof(CardEnergyCost.SetCustomBaseCost));
             ApplyCardEnergyCostCleanupPatch(harmony, nameof(CardEnergyCost.EndOfTurnCleanup));
             ApplyCardEnergyCostCleanupPatch(harmony, nameof(CardEnergyCost.AfterCardPlayedCleanup));
+            ApplyPatch(harmony,
+                "CardModel.SetStarCostUntilPlayed",
+                AccessTools.Method(typeof(CardModel), nameof(CardModel.SetStarCostUntilPlayed)),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeCardStarCostMutation)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterCardStarCostMutation)));
+            ApplyPatch(harmony,
+                "CardModel.SetStarCostThisTurn",
+                AccessTools.Method(typeof(CardModel), nameof(CardModel.SetStarCostThisTurn)),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeCardStarCostMutation)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterCardStarCostMutation)));
+            ApplyPatch(harmony,
+                "CardModel.SetStarCostThisCombat",
+                AccessTools.Method(typeof(CardModel), nameof(CardModel.SetStarCostThisCombat)),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeCardStarCostMutation)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterCardStarCostMutation)));
+            ApplyPatch(harmony,
+                "CardModel.UpgradeStarCostBy",
+                AccessTools.Method(typeof(CardModel), "UpgradeStarCostBy"),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeCardStarCostMutation)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterCardStarCostMutation)));
+            ApplyPatch(harmony,
+                "CardModel.set_BaseReplayCount",
+                AccessTools.PropertySetter(typeof(CardModel), nameof(CardModel.BaseReplayCount)),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeReplayCountMutation)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterReplayCountMutation)));
+            ApplyPatch(harmony,
+                "CardModel.AddKeyword",
+                AccessTools.Method(typeof(CardModel), nameof(CardModel.AddKeyword)),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeKeywordMutation)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterKeywordMutation)));
+            ApplyPatch(harmony,
+                "CardModel.RemoveKeyword",
+                AccessTools.Method(typeof(CardModel), nameof(CardModel.RemoveKeyword)),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeKeywordMutation)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterKeywordMutation)));
+            ApplyPatch(harmony,
+                "CardModel.GiveSingleTurnRetain",
+                AccessTools.Method(typeof(CardModel), nameof(CardModel.GiveSingleTurnRetain)),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeSingleTurnRetainMutation)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterSingleTurnRetainMutation)));
+            ApplyPatch(harmony,
+                "CardModel.GiveSingleTurnSly",
+                AccessTools.Method(typeof(CardModel), nameof(CardModel.GiveSingleTurnSly)),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeSingleTurnSlyMutation)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterSingleTurnSlyMutation)));
+            ApplyPatch(harmony,
+                "CardModel.EndOfTurnCleanup",
+                AccessTools.Method(typeof(CardModel), nameof(CardModel.EndOfTurnCleanup)),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeCardEndOfTurnCleanup)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterCardEndOfTurnCleanup)));
+            ApplyPatch(harmony,
+                "CardCmd.Enchant(EnchantmentModel, CardModel, decimal)",
+                AccessTools.Method(typeof(CardCmd), nameof(CardCmd.Enchant), new[] { typeof(EnchantmentModel), typeof(CardModel), typeof(decimal) }),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeCardEnchant)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterCardEnchant)));
+            ApplyPatch(harmony,
+                "CardCmd.ClearEnchantment(CardModel)",
+                AccessTools.Method(typeof(CardCmd), nameof(CardCmd.ClearEnchantment)),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeClearEnchantment)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterClearEnchantment)));
+            ApplyPatch(harmony,
+                "EnchantmentModel.set_Status",
+                AccessTools.PropertySetter(typeof(EnchantmentModel), nameof(EnchantmentModel.Status)),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeEnchantmentStatusMutation)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterEnchantmentStatusMutation)));
+            ApplyPatch(harmony,
+                "CardCmd.Afflict(AfflictionModel, CardModel, decimal)",
+                AccessTools.Method(typeof(CardCmd), nameof(CardCmd.Afflict), new[] { typeof(AfflictionModel), typeof(CardModel), typeof(decimal) }),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeCardAfflict)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterCardAfflict)));
+            ApplyPatch(harmony,
+                "CardCmd.ClearAffliction(CardModel)",
+                AccessTools.Method(typeof(CardCmd), nameof(CardCmd.ClearAffliction)),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeClearAffliction)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterClearAffliction)));
+            ApplyPatch(harmony,
+                "ForgeCmd.IncreaseSovereignBladeDamage",
+                AccessTools.Method(typeof(ForgeCmd), "IncreaseSovereignBladeDamage"),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeForgeSovereignBladeDamage)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterForgeSovereignBladeDamage)));
+            ApplyPatch(harmony,
+                "SovereignBlade.SetRepeats",
+                AccessTools.Method(typeof(SovereignBlade), nameof(SovereignBlade.SetRepeats)),
+                AccessTools.Method(typeof(RecorderMod), nameof(BeforeSovereignBladeSetRepeats)),
+                AccessTools.Method(typeof(RecorderMod), nameof(AfterSovereignBladeSetRepeats)));
             ApplyPatch(harmony,
                 "RelicModel.IncrementStackCount",
                 AccessTools.Method(typeof(RelicModel), nameof(RelicModel.IncrementStackCount)),
@@ -2886,18 +2975,65 @@ public static class RecorderMod
         }
     }
 
-    private static void BeforeCardUpgrade(ref IEnumerable<CardModel> cards, out CardUpgradeMutationState __state)
+    private static CardTruthMutationState CaptureCardTruthMutationState(IEnumerable<CardModel?> cards)
+    {
+        var records = cards
+            .Where(card => card != null)
+            .Distinct()
+            .Select(card => new CardTruthMutationRecord(card, BattleLogger.CaptureCardTruthState(card!)))
+            .ToList();
+        return new CardTruthMutationState(records);
+    }
+
+    private static CardTruthMutationState CaptureCardTruthMutationState(CardModel? card)
+    {
+        return CaptureCardTruthMutationState(card == null
+            ? Array.Empty<CardModel?>()
+            : new CardModel?[] { card });
+    }
+
+    private static CardTruthMutationState CaptureEnchantmentOwnerMutationState(EnchantmentModel? enchantment)
+    {
+        var card = enchantment != null && enchantment.HasCard
+            ? enchantment.Card
+            : null;
+        return CaptureCardTruthMutationState(card);
+    }
+
+    private static CardTruthMutationState CaptureForgeMutationState(Player? player)
+    {
+        var cards = player?.PlayerCombatState?.AllCards
+            .OfType<SovereignBlade>()
+            .Where(card => !card.IsDupe)
+            .Cast<CardModel?>()
+            .ToList() ?? new List<CardModel?>();
+        return CaptureCardTruthMutationState(cards);
+    }
+
+    private static void EmitCardTruthMutation(
+        CardTruthMutationState state,
+        string reason,
+        CardTruthDiffFields fields)
+    {
+        foreach (var record in state.Records)
+        {
+            if (record.Card == null || record.OldState == null)
+            {
+                continue;
+            }
+
+            BattleLogger.OnCardStateModified(record.Card, record.OldState, reason, fields);
+        }
+    }
+
+    private static void BeforeCardUpgrade(ref IEnumerable<CardModel> cards, out CardTruthMutationState __state)
     {
         var materializedCards = cards?.ToList() ?? new List<CardModel>();
         cards = materializedCards;
-
-        var records = materializedCards
-            .Select(card => new CardUpgradeMutationRecord(card, card.CurrentUpgradeLevel, card.IsUpgraded))
-            .ToList();
-        __state = new CardUpgradeMutationState(records);
+        __state = CaptureCardTruthMutationState(materializedCards);
     }
 
-    private static void AfterCardUpgrade(CardUpgradeMutationState __state)
+    private static void AfterCardUpgrade(CardTruthMutationState __state)
     {
         try
         {
@@ -2906,26 +3042,346 @@ public static class RecorderMod
                 return;
             }
 
-            foreach (var record in __state.Records)
-            {
-                var card = record.Card;
-                if (card == null)
-                {
-                    continue;
-                }
-
-                BattleLogger.OnCardUpgraded(
-                    card,
-                    record.OldUpgradeLevel,
-                    card.CurrentUpgradeLevel,
-                    record.OldUpgraded,
-                    card.IsUpgraded);
-            }
+            EmitCardTruthMutation(__state, "upgrade", CardTruthDiffFields.Upgrade | CardTruthDiffFields.DynamicValues);
         }
         catch (Exception ex)
         {
             Log.Error($"[STS2CombatRecorder] Card upgrade postfix: {ex.Message}");
             DebugFileLogger.Error(nameof(RecorderMod) + ".AfterCardUpgrade", ex);
+        }
+    }
+
+    private static void BeforeCardDowngrade(CardModel card, out CardTruthMutationState __state)
+    {
+        __state = CaptureCardTruthMutationState(card);
+    }
+
+    private static void AfterCardDowngrade(CardTruthMutationState __state)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(
+                __state,
+                "downgrade",
+                CardTruthDiffFields.Upgrade |
+                CardTruthDiffFields.StarCost |
+                CardTruthDiffFields.Keywords |
+                CardTruthDiffFields.VisibleFlags |
+                CardTruthDiffFields.DynamicValues);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] Card downgrade postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterCardDowngrade", ex);
+        }
+    }
+
+    private static void BeforeCardStarCostMutation(CardModel __instance, out CardTruthMutationState __state)
+    {
+        __state = CaptureCardTruthMutationState(__instance);
+    }
+
+    private static void AfterCardStarCostMutation(
+        CardTruthMutationState __state,
+        MethodBase __originalMethod)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(__state, MapCardStarCostModificationReason(__originalMethod.Name), CardTruthDiffFields.StarCost);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] Card star-cost postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterCardStarCostMutation", ex);
+        }
+    }
+
+    private static void BeforeReplayCountMutation(CardModel __instance, out CardTruthMutationState __state)
+    {
+        __state = CaptureCardTruthMutationState(__instance);
+    }
+
+    private static void AfterReplayCountMutation(CardTruthMutationState __state)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(__state, "replay_count_set", CardTruthDiffFields.ReplayCount);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] Replay-count postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterReplayCountMutation", ex);
+        }
+    }
+
+    private static void BeforeKeywordMutation(CardModel __instance, out CardTruthMutationState __state)
+    {
+        __state = CaptureCardTruthMutationState(__instance);
+    }
+
+    private static void AfterKeywordMutation(CardTruthMutationState __state, MethodBase __originalMethod)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(
+                __state,
+                GameStateReader.ToSnakeCase(__originalMethod.Name),
+                CardTruthDiffFields.Keywords | CardTruthDiffFields.VisibleFlags);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] Keyword postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterKeywordMutation", ex);
+        }
+    }
+
+    private static void BeforeSingleTurnRetainMutation(CardModel __instance, out CardTruthMutationState __state)
+    {
+        __state = CaptureCardTruthMutationState(__instance);
+    }
+
+    private static void AfterSingleTurnRetainMutation(CardTruthMutationState __state)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(__state, "give_single_turn_retain", CardTruthDiffFields.VisibleFlags);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] Single-turn retain postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterSingleTurnRetainMutation", ex);
+        }
+    }
+
+    private static void BeforeSingleTurnSlyMutation(CardModel __instance, out CardTruthMutationState __state)
+    {
+        __state = CaptureCardTruthMutationState(__instance);
+    }
+
+    private static void AfterSingleTurnSlyMutation(CardTruthMutationState __state)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(__state, "give_single_turn_sly", CardTruthDiffFields.VisibleFlags);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] Single-turn sly postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterSingleTurnSlyMutation", ex);
+        }
+    }
+
+    private static void BeforeCardEndOfTurnCleanup(CardModel __instance, out CardTruthMutationState __state)
+    {
+        __state = CaptureCardTruthMutationState(__instance);
+    }
+
+    private static void AfterCardEndOfTurnCleanup(CardTruthMutationState __state)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(__state, "cleanup_end_of_turn", CardTruthDiffFields.StarCost | CardTruthDiffFields.VisibleFlags);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] Card end-of-turn cleanup postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterCardEndOfTurnCleanup", ex);
+        }
+    }
+
+    private static void BeforeCardEnchant(EnchantmentModel enchantment, CardModel card, decimal amount, out CardTruthMutationState __state)
+    {
+        __state = CaptureCardTruthMutationState(card);
+    }
+
+    private static void AfterCardEnchant(CardTruthMutationState __state)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(__state, "enchant", CardTruthDiffFields.Enchantment | CardTruthDiffFields.ReplayCount | CardTruthDiffFields.DynamicValues);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] Card enchant postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterCardEnchant", ex);
+        }
+    }
+
+    private static void BeforeClearEnchantment(CardModel card, out CardTruthMutationState __state)
+    {
+        __state = CaptureCardTruthMutationState(card);
+    }
+
+    private static void AfterClearEnchantment(CardTruthMutationState __state)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(__state, "clear_enchantment", CardTruthDiffFields.Enchantment | CardTruthDiffFields.ReplayCount | CardTruthDiffFields.DynamicValues);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] Clear enchantment postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterClearEnchantment", ex);
+        }
+    }
+
+    private static void BeforeEnchantmentStatusMutation(EnchantmentModel __instance, out CardTruthMutationState __state)
+    {
+        __state = CaptureEnchantmentOwnerMutationState(__instance);
+    }
+
+    private static void AfterEnchantmentStatusMutation(CardTruthMutationState __state)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(__state, "enchantment_status", CardTruthDiffFields.Enchantment | CardTruthDiffFields.ReplayCount | CardTruthDiffFields.DynamicValues);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] Enchantment status postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterEnchantmentStatusMutation", ex);
+        }
+    }
+
+    private static void BeforeCardAfflict(AfflictionModel affliction, CardModel card, decimal amount, out CardTruthMutationState __state)
+    {
+        __state = CaptureCardTruthMutationState(card);
+    }
+
+    private static void AfterCardAfflict(CardTruthMutationState __state)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(__state, "afflict", CardTruthDiffFields.Affliction | CardTruthDiffFields.DynamicValues);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] Card afflict postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterCardAfflict", ex);
+        }
+    }
+
+    private static void BeforeClearAffliction(CardModel card, out CardTruthMutationState __state)
+    {
+        __state = CaptureCardTruthMutationState(card);
+    }
+
+    private static void AfterClearAffliction(CardTruthMutationState __state)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(__state, "clear_affliction", CardTruthDiffFields.Affliction | CardTruthDiffFields.DynamicValues);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] Clear affliction postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterClearAffliction", ex);
+        }
+    }
+
+    private static void BeforeForgeSovereignBladeDamage(decimal amount, Player player, out CardTruthMutationState __state)
+    {
+        __state = CaptureForgeMutationState(player);
+    }
+
+    private static void AfterForgeSovereignBladeDamage(CardTruthMutationState __state)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(__state, "forge", CardTruthDiffFields.DynamicValues);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] Forge postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterForgeSovereignBladeDamage", ex);
+        }
+    }
+
+    private static void BeforeSovereignBladeSetRepeats(SovereignBlade __instance, out CardTruthMutationState __state)
+    {
+        __state = CaptureCardTruthMutationState(__instance);
+    }
+
+    private static void AfterSovereignBladeSetRepeats(CardTruthMutationState __state)
+    {
+        try
+        {
+            if (!BattleLogger.IsActive)
+            {
+                return;
+            }
+
+            EmitCardTruthMutation(__state, "set_repeats", CardTruthDiffFields.DynamicValues);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"[STS2CombatRecorder] SovereignBlade.SetRepeats postfix: {ex.Message}");
+            DebugFileLogger.Error(nameof(RecorderMod) + ".AfterSovereignBladeSetRepeats", ex);
         }
     }
 
@@ -3040,6 +3496,18 @@ public static class RecorderMod
             nameof(CardEnergyCost.SetCustomBaseCost) => "set_custom_base_cost",
             nameof(CardEnergyCost.EndOfTurnCleanup) => "cleanup_end_of_turn",
             nameof(CardEnergyCost.AfterCardPlayedCleanup) => "cleanup_after_play",
+            _ => GameStateReader.ToSnakeCase(methodName),
+        };
+    }
+
+    private static string MapCardStarCostModificationReason(string methodName)
+    {
+        return methodName switch
+        {
+            nameof(CardModel.SetStarCostUntilPlayed) => "set_star_cost_until_played",
+            nameof(CardModel.SetStarCostThisTurn) => "set_star_cost_this_turn",
+            nameof(CardModel.SetStarCostThisCombat) => "set_star_cost_this_combat",
+            "UpgradeStarCostBy" => "upgrade_star_cost_by",
             _ => GameStateReader.ToSnakeCase(methodName),
         };
     }
