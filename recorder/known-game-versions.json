@@ -1,0 +1,12 @@
+{
+  "entries": [
+    {
+      "channel": "unknown",
+      "version": "0.99.1",
+      "build": "7ac1f450a64da4851710db715a4f267c2617cbd0",
+      "sts2_dll_hash": "e7e7eed8d3c5f4eff22f857632098a98b97224aa70be0a9befe038ff3c252942",
+      "compat_status": "verified",
+      "notes": "Repository-local exported sts2.dll fingerprint captured in references/sts2-dll/metadata/assembly-info.txt."
+    }
+  ]
+}

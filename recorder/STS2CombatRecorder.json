@@ -1,0 +1,11 @@
+{
+  "id": "STS2CombatRecorder",
+  "name": "STS2 Combat Recorder",
+  "author": "sts2-combat-recorder",
+  "description": "Captures real-time combat events and writes them as NDJSON combat log files compatible with the TypeScript parser/inspector tool.",
+  "version": "0.1.0",
+  "has_pck": false,
+  "has_dll": true,
+  "dependencies": [],
+  "affects_gameplay": true
+}
