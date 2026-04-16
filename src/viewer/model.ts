@@ -27,6 +27,7 @@ export interface RootActionMarker {
   index: number;
   resolution_id: string;
   start_seq: number;
+  anchor_seq: number;
   end_seq: number;
   label: string;
   node: ResolutionNode;
@@ -97,6 +98,60 @@ function collectResolutionPaths(
   }
 }
 
+function collectNodeEvents(node: ResolutionNode): CombatEvent[] {
+  const events = [...node.events];
+  for (const child of node.children) {
+    events.push(...collectNodeEvents(child));
+  }
+
+  events.sort((left, right) => left.seq - right.seq);
+  return events;
+}
+
+function pickActionAnchorSeq(node: ResolutionNode, bounds: SeqBounds): number {
+  const events = collectNodeEvents(node);
+
+  for (const event of events) {
+    if (event.event_type !== "card_moved") {
+      continue;
+    }
+
+    const payload = event.payload as {
+      from_zone?: string;
+      to_zone?: string;
+      reason?: string;
+    };
+    if (
+      payload.from_zone === "hand" &&
+      payload.to_zone === "play" &&
+      payload.reason === "manual_play"
+    ) {
+      return event.seq;
+    }
+  }
+
+  for (const event of events) {
+    if (event.event_type !== "card_moved") {
+      continue;
+    }
+
+    const payload = event.payload as {
+      to_zone?: string;
+    };
+    if (payload.to_zone === "play") {
+      return event.seq;
+    }
+  }
+
+  for (const event of events) {
+    if (event.event_type === "card_play_started" || event.event_type === "potion_used") {
+      return event.seq;
+    }
+  }
+
+  return bounds.start_seq;
+}
+
 function buildRootActionMarkers(
   roots: ResolutionNode[],
 ): RootActionMarker[] {
@@ -108,6 +163,7 @@ function buildRootActionMarkers(
         index,
         resolution_id: node.resolution_id,
         start_seq: bounds.start_seq,
+        anchor_seq: pickActionAnchorSeq(node, bounds),
         end_seq: bounds.end_seq,
         label: node.resolution_id,
         node,
@@ -270,11 +326,11 @@ export function findPreviousActionStart(
   const containingIndex = findContainingRootActionIndex(markers, currentSeq);
   if (containingIndex !== -1) {
     const current = markers[containingIndex];
-    if (currentSeq > current.start_seq) {
-      return current.start_seq;
+    if (currentSeq > current.anchor_seq) {
+      return current.anchor_seq;
     }
 
-    return markers[Math.max(0, containingIndex - 1)]?.start_seq;
+    return markers[Math.max(0, containingIndex - 1)]?.anchor_seq;
   }
 
   let previousIndex = -1;
@@ -286,10 +342,10 @@ export function findPreviousActionStart(
   }
 
   if (previousIndex === -1) {
-    return markers[0]?.start_seq;
+    return markers[0]?.anchor_seq;
   }
 
-  return markers[previousIndex]?.start_seq;
+  return markers[previousIndex]?.anchor_seq;
 }
 
 export function findNextActionStart(
@@ -302,12 +358,17 @@ export function findNextActionStart(
 
   const containingIndex = findContainingRootActionIndex(markers, currentSeq);
   if (containingIndex !== -1) {
-    return markers[containingIndex + 1]?.start_seq;
+    const current = markers[containingIndex];
+    if (currentSeq < current.anchor_seq) {
+      return current.anchor_seq;
+    }
+
+    return markers[containingIndex + 1]?.anchor_seq;
   }
 
   for (const marker of markers) {
-    if (marker.start_seq > currentSeq) {
-      return marker.start_seq;
+    if (marker.anchor_seq > currentSeq) {
+      return marker.anchor_seq;
     }
   }
 

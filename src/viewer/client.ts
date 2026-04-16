@@ -167,7 +167,7 @@ function getInitialSeq(model: ViewerBattleModel): number {
   return (
     model.turn_start_markers[0]?.seq ??
     model.snapshot_markers[0]?.seq ??
-    model.root_action_markers[0]?.end_seq ??
+    model.root_action_markers[0]?.anchor_seq ??
     model.event_seqs[0]
   );
 }
@@ -841,7 +841,7 @@ function renderTimeline(frame: ViewerFrame, loaded: LoadedBattleState): string {
   )} actions near the current step.</div><div class="timeline-list">${visibleWindow.items
     .map((marker) => {
       const isActive = frame.current_root_action?.resolution_id === marker.resolution_id;
-      return `<button class="timeline-item ${isActive ? "is-active" : ""}" data-command="jump-seq" data-seq="${marker.start_seq}">
+      return `<button class="timeline-item ${isActive ? "is-active" : ""}" data-command="jump-seq" data-seq="${marker.anchor_seq}">
         <div class="timeline-overline">Action ${marker.index + 1} · seq ${marker.start_seq}-${marker.end_seq}</div>
         <div class="timeline-title">${escapeHtml(loaded.actionLabels[marker.index] ?? marker.label)}</div>
         <div class="timeline-copy mono">${escapeHtml(marker.resolution_id)}</div>
