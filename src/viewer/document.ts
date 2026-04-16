@@ -598,32 +598,33 @@ a {
 }
 
 .board-panel {
-  gap: 14px;
+  gap: 10px;
+  align-content: start;
 }
 
 .arena {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .battle-top-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(240px, 0.85fr);
-  gap: 12px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(220px, 0.78fr);
+  gap: 10px;
   align-items: start;
 }
 
 .actor-stack,
 .support-stack {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   align-content: start;
 }
 
 .enemy-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(138px, 1fr));
+  gap: 8px;
 }
 
 .enemy-card,
@@ -639,9 +640,13 @@ a {
 
 .enemy-card,
 .actor-card {
-  padding: 14px;
+  padding: 12px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
+}
+
+.player-card {
+  padding: 12px;
 }
 
 .enemy-card.is-dead,
@@ -672,8 +677,8 @@ a {
 .intent-chip {
   display: inline-flex;
   align-items: center;
-  min-height: 30px;
-  padding: 0 10px;
+  min-height: 28px;
+  padding: 0 9px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
@@ -683,7 +688,7 @@ a {
 
 .hp-bar {
   position: relative;
-  height: 12px;
+  height: 10px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
   overflow: hidden;
@@ -738,15 +743,15 @@ a {
 .zone-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .resource-card,
 .zone-card,
 .detail-card {
-  padding: 14px;
+  padding: 12px;
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .resource-title,
@@ -796,7 +801,7 @@ a {
 
 .zone-hint {
   color: var(--accent-strong);
-  font-size: 0.76rem;
+  font-size: 0.72rem;
 }
 
 .pile-detail {
@@ -815,7 +820,7 @@ a {
 }
 
 .pile-list {
-  max-height: 140px;
+  max-height: 120px;
   overflow: auto;
   display: grid;
   gap: 6px;
@@ -835,7 +840,7 @@ a {
 }
 
 .hand-panel {
-  padding: 14px;
+  padding: 12px;
   border-radius: 24px;
   border: 1px solid rgba(240, 181, 106, 0.16);
   background:
@@ -843,19 +848,23 @@ a {
     radial-gradient(circle at top, rgba(240, 181, 106, 0.12), transparent 52%);
 }
 
+.hand-panel-embedded {
+  margin-top: 2px;
+}
+
 .hand-header {
   display: flex;
   justify-content: space-between;
   gap: 10px;
   align-items: baseline;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .hand-grid {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(132px, 1fr);
-  gap: 10px;
+  grid-auto-columns: minmax(118px, 1fr);
+  gap: 8px;
   overflow-x: auto;
   padding-bottom: 4px;
 }
@@ -871,14 +880,14 @@ a {
 .hand-card {
   position: relative;
   overflow: hidden;
-  min-height: 136px;
-  padding: 12px;
+  min-height: 108px;
+  padding: 10px;
   border-radius: 20px;
   border: 1px solid var(--line-strong);
   background:
     linear-gradient(180deg, rgba(58, 79, 97, 0.96) 0%, rgba(28, 41, 54, 0.96) 100%);
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .hand-card::before {
@@ -894,8 +903,8 @@ a {
 .card-cost {
   display: inline-grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: rgba(10, 17, 24, 0.74);
   border: 1px solid rgba(255, 255, 255, 0.18);
@@ -904,13 +913,13 @@ a {
 
 .card-title {
   font-family: var(--serif);
-  font-size: 0.98rem;
+  font-size: 0.88rem;
   line-height: 1.1;
 }
 
 .card-meta {
   color: var(--muted);
-  font-size: 0.76rem;
+  font-size: 0.7rem;
   line-height: 1.45;
 }
 

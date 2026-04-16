@@ -68,6 +68,7 @@ interface ViewerState {
   expandedZones: Set<string>;
   rawEventExpanded: boolean;
   summaryExpanded: boolean;
+  scrollPositions: Map<string, { top: number; left: number }>;
 }
 
 const root = document.getElementById("app");
@@ -85,6 +86,7 @@ const state: ViewerState = {
   expandedZones: new Set<string>(),
   rawEventExpanded: false,
   summaryExpanded: false,
+  scrollPositions: new Map<string, { top: number; left: number }>(),
 };
 
 function escapeHtml(value: string): string {
@@ -186,6 +188,7 @@ function applyLoadedBattle(data: ViewerBattleData, sourceLabel: string): void {
   state.loaded = loaded;
   state.currentSeq = getInitialSeq(loaded.model);
   state.error = undefined;
+  state.scrollPositions.clear();
   state.expandedZones.clear();
   state.rawEventExpanded = false;
   state.summaryExpanded = false;
@@ -351,6 +354,36 @@ function toggleRawEvent(): void {
 function toggleSummary(): void {
   state.summaryExpanded = !state.summaryExpanded;
   render();
+}
+
+function captureScrollPositions(): void {
+  const elements = root.querySelectorAll<HTMLElement>("[data-scroll-key]");
+  for (const element of elements) {
+    const key = element.dataset.scrollKey;
+    if (!key) {
+      continue;
+    }
+    state.scrollPositions.set(key, {
+      top: element.scrollTop,
+      left: element.scrollLeft,
+    });
+  }
+}
+
+function restoreScrollPositions(): void {
+  const elements = root.querySelectorAll<HTMLElement>("[data-scroll-key]");
+  for (const element of elements) {
+    const key = element.dataset.scrollKey;
+    if (!key) {
+      continue;
+    }
+    const position = state.scrollPositions.get(key);
+    if (!position) {
+      continue;
+    }
+    element.scrollTop = position.top;
+    element.scrollLeft = position.left;
+  }
 }
 
 function stepEvent(direction: "prev" | "next"): void {
@@ -612,7 +645,7 @@ function renderEnemyCard(enemy: EntityState): string {
 }
 
 function renderPlayerCard(player: EntityState): string {
-  return `<article class="actor-card ${player.alive ? "" : "is-dead"}">
+  return `<article class="actor-card player-card ${player.alive ? "" : "is-dead"}">
     <div class="actor-top">
       <div>
         <div class="actor-name">${escapeHtml(labelEntity(player))}</div>
@@ -657,7 +690,7 @@ function renderHand(frame: ViewerFrame): string {
     return `<div class="hand-empty">Hand is empty at this step.</div>`;
   }
 
-  return `<div class="hand-grid">${handIds
+  return `<div class="hand-grid" data-scroll-key="board-hand">${handIds
     .map((cardId) => {
       const card = frame.state.cards.get(cardId);
       if (!card) {
@@ -705,7 +738,7 @@ function renderZoneContents(
 
   return `<div class="pile-detail">
     <div class="pile-detail-label">${escapeHtml(zoneName === "draw" ? "Top to Bottom" : "Current Order")}</div>
-    <div class="pile-list">${cardIds
+    <div class="pile-list" data-scroll-key="pile-${escapeHtml(zoneName)}">${cardIds
       .map((cardId, index) => {
         const card = cards.get(cardId);
         return `<div class="pile-item">
@@ -798,21 +831,21 @@ function renderArena(frame: ViewerFrame): string {
             : `<article class="enemy-card"><div class="enemy-name">No enemies</div><div class="enemy-subline">This frame has no active enemies.</div></article>`
         }</section>
         ${player ? renderPlayerCard(player) : `<article class="actor-card"><div class="actor-name">No player entity</div></article>`}
+        <section class="hand-panel hand-panel-embedded">
+          <div class="hand-header">
+            <div>
+              <h3 class="surface-title">Hand</h3>
+              <div class="surface-note">${escapeHtml(String((frame.state.zones.hand ?? []).length))} visible cards</div>
+            </div>
+            <div class="surface-note mono">Turn ${escapeHtml(String(frame.state.turn_index))}</div>
+          </div>
+          ${renderHand(frame)}
+        </section>
       </div>
       <div class="support-stack">
         ${renderResourceCards(frame)}
         ${renderZoneGrid(frame)}
       </div>
-    </section>
-    <section class="hand-panel">
-      <div class="hand-header">
-        <div>
-          <h3 class="surface-title">Hand</h3>
-          <div class="surface-note">${escapeHtml(String((frame.state.zones.hand ?? []).length))} visible cards</div>
-        </div>
-        <div class="surface-note mono">Turn ${escapeHtml(String(frame.state.turn_index))}</div>
-      </div>
-      ${renderHand(frame)}
     </section>
   </section>`;
 }
@@ -1082,7 +1115,7 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
       </section>
     </section>
     <main class="workspace">
-      <aside class="surface panel scroll-panel">
+      <aside class="surface panel scroll-panel" data-scroll-key="panel-left">
         ${renderJumpSections(frame, loaded)}
         <div class="surface-header">
           <h2 class="surface-title">Action Rail</h2>
@@ -1090,10 +1123,10 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
         </div>
         ${renderTimeline(frame, loaded)}
       </aside>
-      <section class="surface panel board-panel scroll-panel">
+      <section class="surface panel board-panel scroll-panel" data-scroll-key="panel-board">
         ${renderArena(frame)}
       </section>
-      <aside class="surface panel scroll-panel">
+      <aside class="surface panel scroll-panel" data-scroll-key="panel-right">
         ${renderStepDetails(frame, loaded)}
         <div class="surface-header">
           <h2 class="surface-title">Key Moments</h2>
@@ -1106,14 +1139,17 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
 }
 
 function render(): void {
+  captureScrollPositions();
   const frame = getCurrentFrame();
 
   if (!state.loaded || !frame) {
     root.innerHTML = renderEmptyState();
+    restoreScrollPositions();
     return;
   }
 
   root.innerHTML = renderLoadedState(state.loaded, frame);
+  restoreScrollPositions();
 }
 
 function getClosestCommandTarget(target: EventTarget | null): HTMLElement | null {
