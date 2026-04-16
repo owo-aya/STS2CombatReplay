@@ -581,6 +581,22 @@ a {
   min-height: 0;
   overflow: hidden;
   align-items: start;
+  position: relative;
+}
+
+.workspace.is-left-collapsed {
+  grid-template-areas: "board right";
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+}
+
+.workspace.is-right-collapsed {
+  grid-template-areas: "left board";
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+}
+
+.workspace.is-left-collapsed.is-right-collapsed {
+  grid-template-areas: "board";
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .panel {
@@ -608,6 +624,53 @@ a {
 .scroll-panel {
   overflow: auto;
   min-height: 0;
+}
+
+.panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-toggle-button,
+.panel-dock-button {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.panel-dock {
+  position: sticky;
+  left: 0;
+  bottom: 12px;
+  z-index: 3;
+  align-self: end;
+  width: fit-content;
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+  padding: 10px 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(7, 12, 18, 0.82);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.22);
+}
+
+.panel-dock-label {
+  color: var(--muted-strong);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.panel-dock-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .timeline-list,
@@ -1106,6 +1169,25 @@ a {
     align-content: start;
   }
 
+  .workspace.is-left-collapsed {
+    grid-template-areas:
+      "board board"
+      "right right";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace.is-right-collapsed {
+    grid-template-areas:
+      "board board"
+      "left left";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace.is-left-collapsed.is-right-collapsed {
+    grid-template-areas: "board";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .panel-left,
   .panel-right {
     max-height: 34vh;
@@ -1128,6 +1210,22 @@ a {
       "right";
     grid-template-columns: minmax(0, 1fr);
     overflow: visible;
+  }
+
+  .workspace.is-left-collapsed {
+    grid-template-areas:
+      "board"
+      "right";
+  }
+
+  .workspace.is-right-collapsed {
+    grid-template-areas:
+      "board"
+      "left";
+  }
+
+  .workspace.is-left-collapsed.is-right-collapsed {
+    grid-template-areas: "board";
   }
 
   .summary-bar {
@@ -1163,6 +1261,10 @@ a {
   .panel-right {
     max-height: none;
   }
+
+  .panel-dock {
+    bottom: 8px;
+  }
 }
 
 @media (max-width: 860px) {
@@ -1184,6 +1286,15 @@ a {
 
   .control-speed-number {
     justify-content: flex-end;
+  }
+
+  .panel-toolbar {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .panel-dock {
+    width: 100%;
   }
 }
 
@@ -1234,11 +1345,38 @@ a {
 
 /* 4. Card played: brief border highlight + micro-lift */
 @keyframes anim-card-play {
-  0%   { box-shadow: 0 0 0 2px var(--accent), transform: translateY(-2px); }
-  100% { box-shadow: none; transform: translateY(0); }
+  0%   {
+    box-shadow:
+      0 0 0 2px rgba(255, 208, 135, 0.92),
+      0 0 28px rgba(240, 181, 106, 0.5),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+    transform: translateY(-6px) scale(1.02);
+    filter: brightness(1.08);
+  }
+  45%  {
+    box-shadow:
+      0 0 0 3px rgba(255, 208, 135, 0.85),
+      0 0 42px rgba(240, 181, 106, 0.72),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+    transform: translateY(-2px) scale(1.03);
+    filter: brightness(1.16);
+  }
+  100% {
+    box-shadow: none;
+    transform: translateY(0) scale(1);
+    filter: brightness(1);
+  }
 }
 .anim-card-play {
-  animation: anim-card-play 100ms ease-out;
+  animation: anim-card-play 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes anim-card-play-board {
+  0%   { box-shadow: inset 0 0 0 0 rgba(240, 181, 106, 0); }
+  35%  { box-shadow: inset 0 0 0 2px rgba(240, 181, 106, 0.28); }
+  100% { box-shadow: inset 0 0 0 0 rgba(240, 181, 106, 0); }
+}
+.anim-card-play-board {
+  animation: anim-card-play-board 240ms ease-out;
 }
 
 /* 5. Power applied/removed: slide-in + fade */

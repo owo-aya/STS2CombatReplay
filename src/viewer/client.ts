@@ -78,6 +78,8 @@ interface ViewerState {
   transitionTimer?: ReturnType<typeof window.setTimeout>;
   postRenderAnimationFrame?: number;
   isActionTransitioning: boolean;
+  leftPanelCollapsed: boolean;
+  rightPanelCollapsed: boolean;
 }
 
 const root = document.getElementById("app");
@@ -97,6 +99,8 @@ const state: ViewerState = {
   summaryExpanded: false,
   scrollPositions: new Map<string, { top: number; left: number }>(),
   isActionTransitioning: false,
+  leftPanelCollapsed: false,
+  rightPanelCollapsed: false,
 };
 
 const NORMAL_PLAY_SPEED_MS = 900;
@@ -407,7 +411,7 @@ function getTransitionDelayForEventSeq(seq: number): number {
 
   switch (event?.event_type) {
     case "card_play_started":
-      baseDelay = 95;
+      baseDelay = 180;
       break;
     case "card_moved": {
       const payload = event.payload as {
@@ -440,7 +444,7 @@ function getTransitionDelayForEventSeq(seq: number): number {
       }
 
       if (payload.to_zone === "play") {
-        baseDelay = 105;
+        baseDelay = 210;
         break;
       }
 
@@ -552,6 +556,15 @@ function toggleRawEvent(): void {
 
 function toggleSummary(): void {
   state.summaryExpanded = !state.summaryExpanded;
+  render();
+}
+
+function togglePanel(side: "left" | "right"): void {
+  if (side === "left") {
+    state.leftPanelCollapsed = !state.leftPanelCollapsed;
+  } else {
+    state.rightPanelCollapsed = !state.rightPanelCollapsed;
+  }
   render();
 }
 
@@ -737,6 +750,29 @@ function renderWarnings(alerts: ViewerAlert[]): string {
       </article>`,
     )
     .join("")}</section>`;
+}
+
+function renderPanelDock(): string {
+  if (!state.leftPanelCollapsed && !state.rightPanelCollapsed) {
+    return "";
+  }
+
+  const buttons: string[] = [];
+  if (state.leftPanelCollapsed) {
+    buttons.push(
+      `<button class="panel-dock-button" data-command="toggle-left-panel">Show Navigation</button>`,
+    );
+  }
+  if (state.rightPanelCollapsed) {
+    buttons.push(
+      `<button class="panel-dock-button" data-command="toggle-right-panel">Show Inspector</button>`,
+    );
+  }
+
+  return `<div class="panel-dock">
+    <div class="panel-dock-label">Panels Hidden</div>
+    <div class="panel-dock-actions">${buttons.join("")}</div>
+  </div>`;
 }
 
 function getBarPercent(current: number, max: number): number {
@@ -1072,6 +1108,21 @@ function renderTimeline(frame: ViewerFrame, loaded: LoadedBattleState): string {
     .join("")}</div>`;
 }
 
+function renderPanelToolbar(
+  title: string,
+  note: string,
+  command: string,
+  actionLabel: string,
+): string {
+  return `<div class="panel-toolbar">
+    <div>
+      <div class="surface-title">${escapeHtml(title)}</div>
+      <div class="surface-note">${escapeHtml(note)}</div>
+    </div>
+    <button class="panel-toggle-button" data-command="${escapeHtml(command)}">${escapeHtml(actionLabel)}</button>
+  </div>`;
+}
+
 function renderJumpSections(frame: ViewerFrame, loaded: LoadedBattleState): string {
   const turnSeqs = loaded.model.turn_start_markers.map((marker) => marker.seq);
   const snapshotSeqs = loaded.model.snapshot_markers.map((marker) => marker.seq);
@@ -1261,6 +1312,14 @@ function renderEmptyState(): string {
 }
 
 function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): string {
+  const workspaceClassNames = [
+    "workspace",
+    state.leftPanelCollapsed ? "is-left-collapsed" : "",
+    state.rightPanelCollapsed ? "is-right-collapsed" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return `<div class="viewer-shell viewer-shell-loaded">
     <input id="battle-folder-input" class="hidden-input" type="file" webkitdirectory directory multiple />
     <section class="shell-top">
@@ -1338,26 +1397,47 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
         </div>
       </section>
     </section>
-    <main class="workspace">
-      <aside class="surface panel panel-left scroll-panel" data-scroll-key="panel-left">
-        ${renderJumpSections(frame, loaded)}
-        <div class="surface-header">
-          <h2 class="surface-title">Action Rail</h2>
-          <span class="surface-note">${escapeHtml(String(loaded.model.action_markers.length))} action markers</span>
-        </div>
-        ${renderTimeline(frame, loaded)}
-      </aside>
+    <main class="${workspaceClassNames}">
+      ${
+        state.leftPanelCollapsed
+          ? ""
+          : `<aside class="surface panel panel-left scroll-panel" data-scroll-key="panel-left">
+              ${renderPanelToolbar(
+                "Navigation",
+                "Turn jumps and action rail",
+                "toggle-left-panel",
+                "Hide",
+              )}
+              ${renderJumpSections(frame, loaded)}
+              <div class="surface-header">
+                <h2 class="surface-title">Action Rail</h2>
+                <span class="surface-note">${escapeHtml(String(loaded.model.action_markers.length))} action markers</span>
+              </div>
+              ${renderTimeline(frame, loaded)}
+            </aside>`
+      }
       <section class="surface panel board-panel scroll-panel" data-scroll-key="panel-board">
         ${renderArena(frame)}
+        ${renderPanelDock()}
       </section>
-      <aside class="surface panel panel-right scroll-panel" data-scroll-key="panel-right">
-        ${renderStepDetails(frame, loaded)}
-        <div class="surface-header">
-          <h2 class="surface-title">Key Moments</h2>
-          <span class="surface-note">${escapeHtml(String(loaded.keyMoments.length))} selected events</span>
-        </div>
-        ${renderKeyMoments(frame, loaded)}
-      </aside>
+      ${
+        state.rightPanelCollapsed
+          ? ""
+          : `<aside class="surface panel panel-right scroll-panel" data-scroll-key="panel-right">
+              ${renderPanelToolbar(
+                "Inspector",
+                "Current step and key moments",
+                "toggle-right-panel",
+                "Hide",
+              )}
+              ${renderStepDetails(frame, loaded)}
+              <div class="surface-header">
+                <h2 class="surface-title">Key Moments</h2>
+                <span class="surface-note">${escapeHtml(String(loaded.keyMoments.length))} selected events</span>
+              </div>
+              ${renderKeyMoments(frame, loaded)}
+            </aside>`
+      }
     </main>
   </div>`;
 }
@@ -1430,10 +1510,18 @@ function postRenderAnimate(frame: ViewerFrame): void {
       if (et === "card_play_started" || isCardPlayMove) {
         const playZoneCard = board.querySelector<HTMLElement>('[data-zone-card="play"]');
         const handPanel = board.querySelector<HTMLElement>(".hand-panel");
-        const animationTarget = playZoneCard ?? handPanel;
-        if (animationTarget) {
-          animationTarget.classList.add("anim-card-play");
-          setTimeout(() => animationTarget.classList.remove("anim-card-play"), 160);
+        const firstHandCard = board.querySelector<HTMLElement>(".hand-card");
+        const animationTargets = [handPanel, playZoneCard, firstHandCard].filter(
+          (target, index, values): target is HTMLElement =>
+            target instanceof HTMLElement && values.indexOf(target) === index,
+        );
+        animationTargets.forEach((target) => target.classList.add("anim-card-play"));
+        if (animationTargets.length > 0) {
+          board.classList.add("anim-card-play-board");
+          setTimeout(() => {
+            animationTargets.forEach((target) => target.classList.remove("anim-card-play"));
+            board.classList.remove("anim-card-play-board");
+          }, 260);
         }
       }
       break;
@@ -1515,6 +1603,12 @@ root.addEventListener("click", (event) => {
       break;
     case "toggle-summary":
       toggleSummary();
+      break;
+    case "toggle-left-panel":
+      togglePanel("left");
+      break;
+    case "toggle-right-panel":
+      togglePanel("right");
       break;
     case "jump-seq": {
       const seqValue = target.getAttribute("data-seq");
