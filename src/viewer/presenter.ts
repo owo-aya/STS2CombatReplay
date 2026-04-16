@@ -22,7 +22,7 @@ import type {
   PotionInstanceState,
   RelicState,
 } from "../types/state";
-import type { RootActionMarker, ViewerBattleModel, ViewerFrame } from "./model";
+import type { ActionMarker, RootActionMarker, ViewerBattleModel, ViewerFrame } from "./model";
 
 export type ViewerTone = "accent" | "good" | "warn" | "bad" | "muted";
 
@@ -275,6 +275,14 @@ export function formatActionLabel(marker: RootActionMarker): string {
   }
 }
 
+export function formatActionMarkerLabel(marker: ActionMarker): string {
+  if (marker.kind === "turn_start") {
+    return `Turn ${marker.turn_index} Start`;
+  }
+
+  return formatActionLabel(marker);
+}
+
 export function buildBattleOverview(model: ViewerBattleModel, sourceLabel: string): BattleOverview {
   const metadata = model.metadata;
   const encounterTitle =
@@ -312,7 +320,7 @@ export function buildBattleOverview(model: ViewerBattleModel, sourceLabel: strin
     badges,
     stats: [
       { label: "Turns", value: `${model.turn_start_markers.length}` },
-      { label: "Actions", value: `${model.root_action_markers.length}` },
+      { label: "Actions", value: `${model.action_markers.length}` },
       { label: "Events", value: `${model.events.length}` },
       { label: "Snapshots", value: `${model.snapshot_markers.length}` },
     ],

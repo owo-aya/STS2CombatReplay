@@ -9,6 +9,7 @@ import type {
 import { deserializeSnapshotMap, loadBattleFromBrowserFiles } from "./browserLoader";
 import {
   createViewerModel,
+  findContainingActionMarkerIndex,
   findNextActionStart,
   findNextSeq,
   findPreviousActionStart,
@@ -23,6 +24,7 @@ import {
   buildKeyMoments,
   buildStepSummary,
   collectViewerAlerts,
+  formatActionMarkerLabel,
   formatActionLabel,
   formatIntent,
   labelCard,
@@ -53,7 +55,8 @@ interface LoadedBattleState {
   keyMoments: KeyMoment[];
   alerts: ViewerAlert[];
   sourceLabel: string;
-  actionLabels: string[];
+  actionMarkerLabels: string[];
+  rootActionLabels: string[];
 }
 
 interface ViewerState {
@@ -167,7 +170,7 @@ function getInitialSeq(model: ViewerBattleModel): number {
   return (
     model.turn_start_markers[0]?.seq ??
     model.snapshot_markers[0]?.seq ??
-    model.root_action_markers[0]?.anchor_seq ??
+    model.action_markers[0]?.anchor_seq ??
     model.event_seqs[0]
   );
 }
@@ -180,7 +183,8 @@ function createLoadedState(data: ViewerBattleData, sourceLabel: string): LoadedB
     keyMoments: buildKeyMoments(model),
     alerts: collectViewerAlerts(model.metadata),
     sourceLabel,
-    actionLabels: model.root_action_markers.map((marker) => formatActionLabel(marker)),
+    actionMarkerLabels: model.action_markers.map((marker) => formatActionMarkerLabel(marker)),
+    rootActionLabels: model.root_action_markers.map((marker) => formatActionLabel(marker)),
   };
 }
 
@@ -407,8 +411,8 @@ function stepAction(direction: "prev" | "next"): void {
 
   const nextSeq =
     direction === "prev"
-      ? findPreviousActionStart(state.loaded.model.root_action_markers, state.currentSeq)
-      : findNextActionStart(state.loaded.model.root_action_markers, state.currentSeq);
+      ? findPreviousActionStart(state.loaded.model.action_markers, state.currentSeq)
+      : findNextActionStart(state.loaded.model.action_markers, state.currentSeq);
   setCurrentSeq(nextSeq);
 }
 
@@ -447,7 +451,7 @@ function advancePlayback(): void {
   const nextSeq =
     state.playMode === "event"
       ? findNextSeq(state.loaded.model.event_seqs, current)
-      : findNextActionStart(state.loaded.model.root_action_markers, current);
+      : findNextActionStart(state.loaded.model.action_markers, current);
 
   if (nextSeq === undefined) {
     stopPlayback();
@@ -833,18 +837,23 @@ function renderArena(frame: ViewerFrame): string {
 }
 
 function renderTimeline(frame: ViewerFrame, loaded: LoadedBattleState): string {
-  const activeActionIndex = frame.current_root_action?.index ?? 0;
-  const visibleWindow = getVisibleWindow(loaded.model.root_action_markers, activeActionIndex, 2, 3);
+  const activeActionIndex = Math.max(
+    0,
+    findContainingActionMarkerIndex(loaded.model.action_markers, frame.seq),
+  );
+  const visibleWindow = getVisibleWindow(loaded.model.action_markers, activeActionIndex, 2, 3);
 
   return `<div class="section-note">Showing ${escapeHtml(String(visibleWindow.items.length))} of ${escapeHtml(
-    String(loaded.model.root_action_markers.length),
+    String(loaded.model.action_markers.length),
   )} actions near the current step.</div><div class="timeline-list">${visibleWindow.items
     .map((marker) => {
-      const isActive = frame.current_root_action?.resolution_id === marker.resolution_id;
+      const isActive = frame.seq >= marker.start_seq && frame.seq <= marker.end_seq;
       return `<button class="timeline-item ${isActive ? "is-active" : ""}" data-command="jump-seq" data-seq="${marker.anchor_seq}">
         <div class="timeline-overline">Action ${marker.index + 1} · seq ${marker.start_seq}-${marker.end_seq}</div>
-        <div class="timeline-title">${escapeHtml(loaded.actionLabels[marker.index] ?? marker.label)}</div>
-        <div class="timeline-copy mono">${escapeHtml(marker.resolution_id)}</div>
+        <div class="timeline-title">${escapeHtml(loaded.actionMarkerLabels[marker.index] ?? "Action")}</div>
+        <div class="timeline-copy mono">${escapeHtml(
+          marker.kind === "root_action" ? marker.resolution_id : `${marker.phase} · ${marker.active_side}`,
+        )}</div>
       </button>`;
     })
     .join("")}</div>`;
@@ -910,7 +919,7 @@ function renderStepDetails(frame: ViewerFrame, loaded: LoadedBattleState): strin
       <h2 class="detail-title">Resolution Context</h2>
       <div class="detail-copy">${escapeHtml(
         frame.current_root_action
-          ? loaded.actionLabels[frame.current_root_action.index] ?? frame.current_root_action.label
+          ? loaded.rootActionLabels[frame.current_root_action.index] ?? frame.current_root_action.label
           : "No root action",
       )}</div>
       <div class="detail-copy mono">${escapeHtml(resolutionPath)}</div>
@@ -1101,7 +1110,7 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
         ${renderJumpSections(frame, loaded)}
         <div class="surface-header">
           <h2 class="surface-title">Action Rail</h2>
-          <span class="surface-note">${escapeHtml(String(loaded.model.root_action_markers.length))} grouped roots</span>
+          <span class="surface-note">${escapeHtml(String(loaded.model.action_markers.length))} action markers</span>
         </div>
         ${renderTimeline(frame, loaded)}
       </aside>
@@ -1132,6 +1141,84 @@ function render(): void {
 
   root.innerHTML = renderLoadedState(state.loaded, frame);
   restoreScrollPositions();
+  postRenderAnimate(frame);
+}
+
+function postRenderAnimate(frame: ViewerFrame): void {
+  const et = frame.event.event_type;
+  const board = root.querySelector<HTMLElement>(".board-panel");
+  if (!board) return;
+
+  switch (et) {
+    case "damage_attempt": {
+      const targetId = (frame.event.payload as DamageAttemptPayload).settled_target_entity_id;
+      const card = targetId
+        ? board.querySelector<HTMLElement>(`.enemy-card[data-entity="${targetId}"], .player-card[data-entity="${targetId}"]`)
+        : null;
+      if (card) {
+        card.classList.add("anim-hp-damage");
+        setTimeout(() => card.classList.remove("anim-hp-damage"), 160);
+      }
+      break;
+    }
+    case "block_changed":
+    case "block_broken": {
+      const entityCards = board.querySelectorAll<HTMLElement>(".enemy-card, .player-card");
+      entityCards.forEach((card) => {
+        if (card.querySelector(".is-block")) {
+          card.classList.add("anim-block-change");
+          setTimeout(() => card.classList.remove("anim-block-change"), 130);
+        }
+      });
+      break;
+    }
+    case "entity_died": {
+      const deadId = frame.event.payload.entity_id;
+      const deadCard = deadId
+        ? board.querySelector<HTMLElement>(`.enemy-card[data-entity="${deadId}"], .player-card[data-entity="${deadId}"]`)
+        : null;
+      if (deadCard) {
+        deadCard.classList.add("anim-entity-die");
+      }
+      break;
+    }
+    case "card_play_started": {
+      const handCards = board.querySelectorAll<HTMLElement>(".hand-card");
+      if (handCards.length > 0) {
+        handCards[0]?.classList.add("anim-card-play");
+        setTimeout(() => handCards[0]?.classList.remove("anim-card-play"), 110);
+      }
+      break;
+    }
+    case "power_applied":
+    case "power_removed": {
+      const targetEntity = (frame.event.payload as PowerAppliedPayload).target_entity_id;
+      const entityCard = targetEntity
+        ? board.querySelector<HTMLElement>(`.enemy-card[data-entity="${targetEntity}"], .player-card[data-entity="${targetEntity}"]`)
+        : null;
+      if (entityCard) {
+        entityCard.classList.add("anim-power-change");
+        setTimeout(() => entityCard.classList.remove("anim-power-change"), 160);
+      }
+      break;
+    }
+    case "orb_evoked": {
+      board.classList.add("anim-orb-evoke");
+      setTimeout(() => board.classList.remove("anim-orb-evoke"), 160);
+      break;
+    }
+    case "hp_changed": {
+      const hpEntity = frame.event.payload.entity_id;
+      const hpCard = hpEntity
+        ? board.querySelector<HTMLElement>(`.enemy-card[data-entity="${hpEntity}"], .player-card[data-entity="${hpEntity}"]`)
+        : null;
+      if (hpCard) {
+        hpCard.classList.add("anim-hp-tick");
+        setTimeout(() => hpCard.classList.remove("anim-hp-tick"), 210);
+      }
+      break;
+    }
+  }
 }
 
 function getClosestCommandTarget(target: EventTarget | null): HTMLElement | null {

@@ -24,6 +24,7 @@ export interface TurnStartMarker {
 }
 
 export interface RootActionMarker {
+  kind: "root_action";
   index: number;
   resolution_id: string;
   start_seq: number;
@@ -32,6 +33,19 @@ export interface RootActionMarker {
   label: string;
   node: ResolutionNode;
 }
+
+export interface TurnStartActionMarker {
+  kind: "turn_start";
+  index: number;
+  start_seq: number;
+  anchor_seq: number;
+  end_seq: number;
+  turn_index: number;
+  active_side: string;
+  phase: string;
+}
+
+export type ActionMarker = RootActionMarker | TurnStartActionMarker;
 
 export interface ViewerBattleModel extends ViewerBattleData {
   event_seqs: number[];
@@ -42,6 +56,7 @@ export interface ViewerBattleModel extends ViewerBattleData {
   snapshot_markers: SnapshotMarker[];
   turn_start_markers: TurnStartMarker[];
   root_action_markers: RootActionMarker[];
+  action_markers: ActionMarker[];
 }
 
 export interface ViewerFrame {
@@ -160,6 +175,7 @@ function buildRootActionMarkers(
       const bounds = computeNodeBounds(node);
 
       return {
+        kind: "root_action",
         index,
         resolution_id: node.resolution_id,
         start_seq: bounds.start_seq,
@@ -169,6 +185,57 @@ function buildRootActionMarkers(
         node,
       };
     })
+    .sort((left, right) => left.start_seq - right.start_seq)
+    .map((marker, index) => ({ ...marker, index }));
+}
+
+function buildTurnStartActionMarkers(events: CombatEvent[]): TurnStartActionMarker[] {
+  const markers: TurnStartActionMarker[] = [];
+
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index];
+    if (event.event_type !== "turn_started") {
+      continue;
+    }
+
+    const payload = event.payload as TurnStartedPayload;
+    const phase = payload.phase ?? event.phase ?? "";
+    if (phase !== "turn_start") {
+      continue;
+    }
+
+    let endSeq = event.seq;
+    for (let nextIndex = index + 1; nextIndex < events.length; nextIndex++) {
+      const nextEvent = events[nextIndex];
+      if (nextEvent.turn_index !== event.turn_index) {
+        break;
+      }
+      if ((nextEvent.phase ?? "") !== phase) {
+        break;
+      }
+      endSeq = nextEvent.seq;
+    }
+
+    markers.push({
+      kind: "turn_start",
+      index: markers.length,
+      start_seq: event.seq,
+      anchor_seq: endSeq,
+      end_seq: endSeq,
+      turn_index: payload.turn_index,
+      active_side: payload.active_side,
+      phase,
+    });
+  }
+
+  return markers;
+}
+
+function buildActionMarkers(
+  rootActionMarkers: RootActionMarker[],
+  turnStartActionMarkers: TurnStartActionMarker[],
+): ActionMarker[] {
+  return [...rootActionMarkers, ...turnStartActionMarkers]
     .sort((left, right) => left.start_seq - right.start_seq)
     .map((marker, index) => ({ ...marker, index }));
 }
@@ -217,6 +284,9 @@ export function createViewerModel(data: ViewerBattleData): ViewerBattleModel {
       };
     });
 
+  const turnStartActionMarkers = buildTurnStartActionMarkers(data.events);
+  const actionMarkers = buildActionMarkers(rootActionMarkers, turnStartActionMarkers);
+
   return {
     ...data,
     event_seqs: eventSeqs,
@@ -227,6 +297,7 @@ export function createViewerModel(data: ViewerBattleData): ViewerBattleModel {
     snapshot_markers: snapshotMarkers,
     turn_start_markers: turnStartMarkers,
     root_action_markers: rootActionMarkers,
+    action_markers: actionMarkers,
   };
 }
 
@@ -301,8 +372,8 @@ export function findNextSeq(
   return undefined;
 }
 
-function findContainingRootActionIndex(
-  markers: RootActionMarker[],
+export function findContainingActionMarkerIndex(
+  markers: ActionMarker[],
   currentSeq: number,
 ): number {
   for (let index = 0; index < markers.length; index++) {
@@ -316,14 +387,14 @@ function findContainingRootActionIndex(
 }
 
 export function findPreviousActionStart(
-  markers: RootActionMarker[],
+  markers: ActionMarker[],
   currentSeq: number,
 ): number | undefined {
   if (markers.length === 0) {
     return undefined;
   }
 
-  const containingIndex = findContainingRootActionIndex(markers, currentSeq);
+  const containingIndex = findContainingActionMarkerIndex(markers, currentSeq);
   if (containingIndex !== -1) {
     const current = markers[containingIndex];
     if (currentSeq > current.anchor_seq) {
@@ -349,14 +420,14 @@ export function findPreviousActionStart(
 }
 
 export function findNextActionStart(
-  markers: RootActionMarker[],
+  markers: ActionMarker[],
   currentSeq: number,
 ): number | undefined {
   if (markers.length === 0) {
     return undefined;
   }
 
-  const containingIndex = findContainingRootActionIndex(markers, currentSeq);
+  const containingIndex = findContainingActionMarkerIndex(markers, currentSeq);
   if (containingIndex !== -1) {
     const current = markers[containingIndex];
     if (currentSeq < current.anchor_seq) {
