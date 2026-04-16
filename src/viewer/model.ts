@@ -127,44 +127,18 @@ function pickActionAnchorSeq(node: ResolutionNode, bounds: SeqBounds): number {
   const events = collectNodeEvents(node);
 
   for (const event of events) {
-    if (event.event_type !== "card_moved") {
-      continue;
-    }
-
-    const payload = event.payload as {
-      from_zone?: string;
-      to_zone?: string;
-      reason?: string;
-    };
-    if (
-      payload.from_zone === "hand" &&
-      payload.to_zone === "play" &&
-      payload.reason === "manual_play"
-    ) {
+    if (event.event_type === "card_play_resolved") {
       return event.seq;
     }
   }
 
   for (const event of events) {
-    if (event.event_type !== "card_moved") {
-      continue;
-    }
-
-    const payload = event.payload as {
-      to_zone?: string;
-    };
-    if (payload.to_zone === "play") {
+    if (event.event_type === "potion_used") {
       return event.seq;
     }
   }
 
-  for (const event of events) {
-    if (event.event_type === "card_play_started" || event.event_type === "potion_used") {
-      return event.seq;
-    }
-  }
-
-  return bounds.start_seq;
+  return bounds.end_seq;
 }
 
 function buildRootActionMarkers(

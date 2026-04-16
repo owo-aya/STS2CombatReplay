@@ -9,7 +9,7 @@ const markers: RootActionMarker[] = [
     index: 0,
     resolution_id: "r_card_001",
     start_seq: 38,
-    anchor_seq: 40,
+    anchor_seq: 44,
     end_seq: 44,
     label: "r_card_001",
     node: {} as RootActionMarker["node"],
@@ -19,7 +19,7 @@ const markers: RootActionMarker[] = [
     index: 1,
     resolution_id: "r_card_002",
     start_seq: 45,
-    anchor_seq: 47,
+    anchor_seq: 50,
     end_seq: 53,
     label: "r_card_002",
     node: {} as RootActionMarker["node"],
@@ -38,22 +38,23 @@ const markers: RootActionMarker[] = [
 
 describe("viewer action navigation", () => {
   test("advances to the current action anchor before moving on to the next action", () => {
-    expect(findNextActionStart(markers, 44)).toBe(47);
-    expect(findNextActionStart(markers, 45)).toBe(47);
-    expect(findNextActionStart(markers, 46)).toBe(47);
-    expect(findNextActionStart(markers, 47)).toBe(55);
+    expect(findNextActionStart(markers, 35)).toBe(44);
+    expect(findNextActionStart(markers, 44)).toBe(50);
+    expect(findNextActionStart(markers, 45)).toBe(50);
+    expect(findNextActionStart(markers, 46)).toBe(50);
+    expect(findNextActionStart(markers, 47)).toBe(50);
     expect(findNextActionStart(markers, 50)).toBe(55);
     expect(findNextActionStart(markers, 54)).toBe(55);
   });
 
   test("rewinds to the current action anchor before stepping to the previous action", () => {
-    expect(findPreviousActionStart(markers, 50)).toBe(47);
-    expect(findPreviousActionStart(markers, 47)).toBe(40);
-    expect(findPreviousActionStart(markers, 46)).toBe(40);
-    expect(findPreviousActionStart(markers, 54)).toBe(47);
+    expect(findPreviousActionStart(markers, 50)).toBe(44);
+    expect(findPreviousActionStart(markers, 47)).toBe(44);
+    expect(findPreviousActionStart(markers, 46)).toBe(44);
+    expect(findPreviousActionStart(markers, 54)).toBe(50);
   });
 
-  test("anchors manual player actions to the hand-to-play move", () => {
+  test("anchors manual player actions to card_play_resolved", () => {
     const model = createViewerModel({
       metadata: { battle_id: "battle:test" } as never,
       events: [
@@ -104,12 +105,21 @@ describe("viewer action navigation", () => {
             reason: "block_gain",
           },
         },
+        {
+          seq: 14,
+          event_type: "card_play_resolved",
+          resolution_id: "r_card_001",
+          payload: {
+            card_instance_id: "card:002",
+            final_zone: "discard",
+          },
+        },
       ] as never,
       snapshots: new Map(),
     });
 
     expect(model.root_action_markers[0]?.start_seq).toBe(10);
-    expect(model.root_action_markers[0]?.anchor_seq).toBe(12);
+    expect(model.root_action_markers[0]?.anchor_seq).toBe(14);
   });
 
   test("inserts a turn-start action marker before the first player action of the next turn", () => {

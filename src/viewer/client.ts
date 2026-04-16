@@ -1,4 +1,5 @@
 import type { Snapshot } from "../types/snapshot";
+import type { DamageAttemptPayload, PowerAppliedPayload } from "../types/events";
 import type {
   BattleState,
   CardInstanceState,
@@ -74,6 +75,9 @@ interface ViewerState {
   rawEventExpanded: boolean;
   summaryExpanded: boolean;
   scrollPositions: Map<string, { top: number; left: number }>;
+  transitionTimer?: ReturnType<typeof window.setTimeout>;
+  postRenderAnimationFrame?: number;
+  isActionTransitioning: boolean;
 }
 
 const root = document.getElementById("app");
@@ -92,6 +96,7 @@ const state: ViewerState = {
   rawEventExpanded: false,
   summaryExpanded: false,
   scrollPositions: new Map<string, { top: number; left: number }>(),
+  isActionTransitioning: false,
 };
 
 function escapeHtml(value: string): string {
@@ -163,14 +168,31 @@ function stopPlayback(): void {
     window.clearInterval(state.playTimer);
     state.playTimer = undefined;
   }
+  stopActionTransition();
+  stopPostRenderAnimationFrame();
   state.isPlaying = false;
+}
+
+function stopActionTransition(): void {
+  if (state.transitionTimer !== undefined) {
+    window.clearTimeout(state.transitionTimer);
+    state.transitionTimer = undefined;
+  }
+  state.isActionTransitioning = false;
+}
+
+function stopPostRenderAnimationFrame(): void {
+  if (state.postRenderAnimationFrame !== undefined) {
+    window.cancelAnimationFrame(state.postRenderAnimationFrame);
+    state.postRenderAnimationFrame = undefined;
+  }
 }
 
 function getInitialSeq(model: ViewerBattleModel): number {
   return (
+    model.action_markers[0]?.anchor_seq ??
     model.turn_start_markers[0]?.seq ??
     model.snapshot_markers[0]?.seq ??
-    model.action_markers[0]?.anchor_seq ??
     model.event_seqs[0]
   );
 }
@@ -190,6 +212,8 @@ function createLoadedState(data: ViewerBattleData, sourceLabel: string): LoadedB
 
 function applyLoadedBattle(data: ViewerBattleData, sourceLabel: string): void {
   stopPlayback();
+  stopActionTransition();
+  stopPostRenderAnimationFrame();
   const loaded = createLoadedState(data, sourceLabel);
   state.loaded = loaded;
   state.currentSeq = getInitialSeq(loaded.model);
@@ -307,8 +331,79 @@ function setCurrentSeq(nextSeq: number | undefined): void {
     return;
   }
 
+  stopActionTransition();
   state.currentSeq = nextSeq;
   render();
+}
+
+function getSeqsBetween(currentSeq: number, targetSeq: number): number[] {
+  if (!state.loaded || targetSeq <= currentSeq) {
+    return [];
+  }
+
+  return state.loaded.model.event_seqs.filter((seq) => seq > currentSeq && seq <= targetSeq);
+}
+
+function getTransitionDelayForEventSeq(seq: number): number {
+  if (!state.loaded) {
+    return 150;
+  }
+
+  const index = state.loaded.model.event_index_by_seq.get(seq);
+  const event = index !== undefined ? state.loaded.model.events[index] : undefined;
+  switch (event?.event_type) {
+    case "card_play_started":
+    case "card_moved":
+      return 140;
+    case "damage_attempt":
+    case "hp_changed":
+    case "block_changed":
+    case "block_broken":
+      return 200;
+    case "power_applied":
+    case "power_removed":
+      return 170;
+    case "card_play_resolved":
+    case "turn_started":
+      return 130;
+    default:
+      return 120;
+  }
+}
+
+function playActionTransitionTo(targetSeq: number): void {
+  if (!state.loaded || state.currentSeq === undefined) {
+    return;
+  }
+
+  const seqs = getSeqsBetween(state.currentSeq, targetSeq);
+  if (seqs.length === 0) {
+    setCurrentSeq(targetSeq);
+    return;
+  }
+
+  stopActionTransition();
+  state.isActionTransitioning = true;
+
+  const advance = (): void => {
+    const nextSeq = seqs.shift();
+    if (nextSeq === undefined) {
+      stopActionTransition();
+      return;
+    }
+
+    state.currentSeq = nextSeq;
+    render();
+
+    if (seqs.length === 0) {
+      stopActionTransition();
+      return;
+    }
+
+    state.transitionTimer = window.setTimeout(advance, getTransitionDelayForEventSeq(nextSeq));
+  };
+
+  advance();
 }
 
 function getMarkerIndexBySeq(values: number[], seq: number): number {
@@ -413,6 +508,16 @@ function stepAction(direction: "prev" | "next"): void {
     direction === "prev"
       ? findPreviousActionStart(state.loaded.model.action_markers, state.currentSeq)
       : findNextActionStart(state.loaded.model.action_markers, state.currentSeq);
+
+  if (nextSeq === undefined) {
+    return;
+  }
+
+  if (direction === "next" && nextSeq > state.currentSeq) {
+    playActionTransitionTo(nextSeq);
+    return;
+  }
+
   setCurrentSeq(nextSeq);
 }
 
@@ -447,6 +552,10 @@ function advancePlayback(): void {
     return;
   }
 
+  if (state.isActionTransitioning) {
+    return;
+  }
+
   const current = state.currentSeq;
   const nextSeq =
     state.playMode === "event"
@@ -456,6 +565,11 @@ function advancePlayback(): void {
   if (nextSeq === undefined) {
     stopPlayback();
     render();
+    return;
+  }
+
+  if (state.playMode === "action" && nextSeq > current) {
+    playActionTransitionTo(nextSeq);
     return;
   }
 
@@ -680,7 +794,7 @@ function renderHand(frame: ViewerFrame): string {
     .map((cardId) => {
       const card = frame.state.cards.get(cardId);
       if (!card) {
-        return `<article class="hand-card">
+        return `<article class="hand-card" data-card="${escapeHtml(cardId)}">
           <div class="card-cost">?</div>
           <div class="card-title">${escapeHtml(cardId)}</div>
           <div class="card-meta mono">${escapeHtml(cardId)}</div>
@@ -688,7 +802,7 @@ function renderHand(frame: ViewerFrame): string {
         </article>`;
       }
 
-      return `<article class="hand-card">
+      return `<article class="hand-card" data-card="${escapeHtml(card.card_instance_id)}">
         <div class="card-cost">${escapeHtml(card.cost !== undefined ? String(card.cost) : "?")}</div>
         <div class="card-title">${escapeHtml(labelCard(card))}</div>
         <div class="card-meta">${escapeHtml(card.card_def_id)}<br /><span class="mono">${escapeHtml(
@@ -751,6 +865,7 @@ function renderZoneGrid(frame: ViewerFrame): string {
       const isExpandable = entry.cards.length > 0;
       return `<button
         class="zone-card zone-card-button ${isExpanded ? "is-expanded" : ""}"
+        data-zone-card="${escapeHtml(entry.zoneName)}"
         ${isExpandable ? `data-command="toggle-zone" data-zone="${escapeHtml(entry.zoneName)}"` : "disabled"}
       >
         <h3 class="zone-title">${escapeHtml(entry.zoneName)}</h3>
@@ -1130,6 +1245,7 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
 }
 
 function render(): void {
+  stopPostRenderAnimationFrame();
   captureScrollPositions();
   const frame = getCurrentFrame();
 
@@ -1141,7 +1257,13 @@ function render(): void {
 
   root.innerHTML = renderLoadedState(state.loaded, frame);
   restoreScrollPositions();
-  postRenderAnimate(frame);
+  state.postRenderAnimationFrame = window.requestAnimationFrame(() => {
+    state.postRenderAnimationFrame = undefined;
+    if (state.currentSeq !== frame.seq) {
+      return;
+    }
+    postRenderAnimate(frame);
+  });
 }
 
 function postRenderAnimate(frame: ViewerFrame): void {
@@ -1188,11 +1310,16 @@ function postRenderAnimate(frame: ViewerFrame): void {
         et === "card_moved" &&
         (frame.event.payload as { to_zone?: string }).to_zone === "play";
       if (et === "card_play_started" || isCardPlayMove) {
-        const handCards = board.querySelectorAll<HTMLElement>(".hand-card");
-        if (handCards.length > 0) {
-          handCards[0]?.classList.add("anim-card-play");
-          setTimeout(() => handCards[0]?.classList.remove("anim-card-play"), 110);
-        }
+        const playZoneCard = board.querySelector<HTMLElement>('[data-zone-card="play"]');
+        const handPanel = board.querySelector<HTMLElement>(".hand-panel");
+        const firstHandCard = board.querySelector<HTMLElement>(".hand-card");
+        const animationTargets = [playZoneCard, handPanel, firstHandCard].filter(
+          (value): value is HTMLElement => Boolean(value),
+        );
+        animationTargets.forEach((target) => {
+          target.classList.add("anim-card-play");
+          setTimeout(() => target.classList.remove("anim-card-play"), 160);
+        });
       }
       break;
     }
