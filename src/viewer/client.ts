@@ -100,6 +100,9 @@ const state: ViewerState = {
 };
 
 const NORMAL_PLAY_SPEED_MS = 900;
+const MIN_PLAYBACK_SPEED_MULTIPLIER = 0.5;
+const MAX_PLAYBACK_SPEED_MULTIPLIER = 5;
+const PLAYBACK_SPEED_STEP = 0.25;
 
 function escapeHtml(value: string): string {
   return value
@@ -348,6 +351,49 @@ function getSeqsBetween(currentSeq: number, targetSeq: number): number[] {
 
 function getPlaybackPaceMultiplier(): number {
   return Math.max(0.12, state.playSpeedMs / NORMAL_PLAY_SPEED_MS);
+}
+
+function clampPlaybackSpeedMultiplier(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+
+  return Math.min(
+    MAX_PLAYBACK_SPEED_MULTIPLIER,
+    Math.max(MIN_PLAYBACK_SPEED_MULTIPLIER, value),
+  );
+}
+
+function getPlaybackSpeedMultiplierValue(): number {
+  return NORMAL_PLAY_SPEED_MS / state.playSpeedMs;
+}
+
+function formatPlaybackSpeedMultiplier(value: number): string {
+  const rounded = Math.round(value * 100) / 100;
+  if (Math.abs(rounded - Math.round(rounded)) < 0.001) {
+    return `${Math.round(rounded)}`;
+  }
+  if (Math.abs(rounded * 2 - Math.round(rounded * 2)) < 0.001) {
+    return rounded.toFixed(1);
+  }
+  return rounded.toFixed(2);
+}
+
+function applyPlaybackSpeedMultiplier(value: number): void {
+  const nextMultiplier = clampPlaybackSpeedMultiplier(value);
+  const nextPlaySpeedMs = Math.max(90, Math.round(NORMAL_PLAY_SPEED_MS / nextMultiplier));
+  if (nextPlaySpeedMs === state.playSpeedMs) {
+    return;
+  }
+
+  state.playSpeedMs = nextPlaySpeedMs;
+  if (state.isPlaying) {
+    if (state.playTimer !== undefined) {
+      window.clearInterval(state.playTimer);
+    }
+    state.playTimer = window.setInterval(advancePlayback, state.playSpeedMs);
+  }
+  render();
 }
 
 function getTransitionDelayForEventSeq(seq: number): number {
@@ -1248,7 +1294,7 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
       </section>
       ${state.summaryExpanded ? renderWarnings(loaded.alerts) : ""}
       <section class="surface controls-bar">
-        <div class="controls-group">
+        <div class="controls-group controls-group-nav">
           <button class="control-button" data-command="step-prev-turn">Prev Turn</button>
           <button class="control-button" data-command="step-prev-action">Prev Action</button>
           <button class="control-button" data-command="step-prev-event">Prev Event</button>
@@ -1259,25 +1305,41 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
           <button class="control-button" data-command="step-next-action">Next Action</button>
           <button class="control-button" data-command="step-next-turn">Next Turn</button>
         </div>
-        <div class="controls-group">
+        <div class="controls-group controls-group-playback">
           <select id="play-mode" class="control-select">
             <option value="action" ${state.playMode === "action" ? "selected" : ""}>Autoplay Actions</option>
             <option value="event" ${state.playMode === "event" ? "selected" : ""}>Autoplay Events</option>
           </select>
-          <select id="play-speed" class="control-select">
-            <option value="1800" ${state.playSpeedMs === 1800 ? "selected" : ""}>0.5x</option>
-            <option value="1200" ${state.playSpeedMs === 1200 ? "selected" : ""}>0.75x</option>
-            <option value="900" ${state.playSpeedMs === 900 ? "selected" : ""}>1x</option>
-            <option value="600" ${state.playSpeedMs === 600 ? "selected" : ""}>1.5x</option>
-            <option value="450" ${state.playSpeedMs === 450 ? "selected" : ""}>2x</option>
-            <option value="300" ${state.playSpeedMs === 300 ? "selected" : ""}>3x</option>
-            <option value="180" ${state.playSpeedMs === 180 ? "selected" : ""}>5x</option>
-          </select>
+          <label class="control-speed" for="play-speed-range">
+            <span class="control-speed-label">Speed</span>
+            <input
+              id="play-speed-range"
+              class="control-range"
+              type="range"
+              min="${MIN_PLAYBACK_SPEED_MULTIPLIER}"
+              max="${MAX_PLAYBACK_SPEED_MULTIPLIER}"
+              step="${PLAYBACK_SPEED_STEP}"
+              value="${formatPlaybackSpeedMultiplier(getPlaybackSpeedMultiplierValue())}"
+            />
+            <div class="control-speed-number">
+              <input
+                id="play-speed-input"
+                class="control-number"
+                type="number"
+                min="${MIN_PLAYBACK_SPEED_MULTIPLIER}"
+                max="${MAX_PLAYBACK_SPEED_MULTIPLIER}"
+                step="${PLAYBACK_SPEED_STEP}"
+                inputmode="decimal"
+                value="${formatPlaybackSpeedMultiplier(getPlaybackSpeedMultiplierValue())}"
+              />
+              <span class="control-suffix">x</span>
+            </div>
+          </label>
         </div>
       </section>
     </section>
     <main class="workspace">
-      <aside class="surface panel scroll-panel" data-scroll-key="panel-left">
+      <aside class="surface panel panel-left scroll-panel" data-scroll-key="panel-left">
         ${renderJumpSections(frame, loaded)}
         <div class="surface-header">
           <h2 class="surface-title">Action Rail</h2>
@@ -1288,7 +1350,7 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
       <section class="surface panel board-panel scroll-panel" data-scroll-key="panel-board">
         ${renderArena(frame)}
       </section>
-      <aside class="surface panel scroll-panel" data-scroll-key="panel-right">
+      <aside class="surface panel panel-right scroll-panel" data-scroll-key="panel-right">
         ${renderStepDetails(frame, loaded)}
         <div class="surface-header">
           <h2 class="surface-title">Key Moments</h2>
@@ -1500,14 +1562,12 @@ root.addEventListener("change", (event) => {
     return;
   }
 
-  if (target.id === "play-speed" && target instanceof HTMLSelectElement) {
-    state.playSpeedMs = Number.parseInt(target.value, 10);
-    if (state.isPlaying) {
-      togglePlayback();
-      togglePlayback();
-    } else {
-      render();
-    }
+  if (
+    (target.id === "play-speed-range" || target.id === "play-speed-input") &&
+    target instanceof HTMLInputElement
+  ) {
+    const nextValue = Number.parseFloat(target.value);
+    applyPlaybackSpeedMultiplier(nextValue);
     return;
   }
 
