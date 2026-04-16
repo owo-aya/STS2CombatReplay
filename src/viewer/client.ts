@@ -99,6 +99,8 @@ const state: ViewerState = {
   isActionTransitioning: false,
 };
 
+const NORMAL_PLAY_SPEED_MS = 900;
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -344,6 +346,10 @@ function getSeqsBetween(currentSeq: number, targetSeq: number): number[] {
   return state.loaded.model.event_seqs.filter((seq) => seq > currentSeq && seq <= targetSeq);
 }
 
+function getPlaybackPaceMultiplier(): number {
+  return Math.max(0.12, state.playSpeedMs / NORMAL_PLAY_SPEED_MS);
+}
+
 function getTransitionDelayForEventSeq(seq: number): number {
   if (!state.loaded) {
     return 150;
@@ -351,24 +357,70 @@ function getTransitionDelayForEventSeq(seq: number): number {
 
   const index = state.loaded.model.event_index_by_seq.get(seq);
   const event = index !== undefined ? state.loaded.model.events[index] : undefined;
+  let baseDelay = 120;
+
   switch (event?.event_type) {
     case "card_play_started":
-    case "card_moved":
-      return 140;
+      baseDelay = 95;
+      break;
+    case "card_moved": {
+      const payload = event.payload as {
+        reason?: string;
+        from_zone?: string;
+        to_zone?: string;
+      };
+
+      if (payload.reason === "zone_sync") {
+        baseDelay =
+          payload.from_zone === "discard" && payload.to_zone === "draw"
+            ? 24
+            : 34;
+        break;
+      }
+
+      if (payload.reason === "draw") {
+        baseDelay = 52;
+        break;
+      }
+
+      if (payload.reason === "discard") {
+        baseDelay = 56;
+        break;
+      }
+
+      if (payload.reason === "resolve_play") {
+        baseDelay = 88;
+        break;
+      }
+
+      if (payload.to_zone === "play") {
+        baseDelay = 105;
+        break;
+      }
+
+      baseDelay = 90;
+      break;
+    }
     case "damage_attempt":
     case "hp_changed":
     case "block_changed":
     case "block_broken":
-      return 200;
+      baseDelay = 185;
+      break;
     case "power_applied":
     case "power_removed":
-      return 170;
+      baseDelay = 155;
+      break;
     case "card_play_resolved":
     case "turn_started":
-      return 130;
+      baseDelay = 110;
+      break;
     default:
-      return 120;
+      baseDelay = 120;
+      break;
   }
+
+  return Math.max(18, Math.round(baseDelay * getPlaybackPaceMultiplier()));
 }
 
 function playActionTransitionTo(targetSeq: number): void {
@@ -1213,9 +1265,13 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
             <option value="event" ${state.playMode === "event" ? "selected" : ""}>Autoplay Events</option>
           </select>
           <select id="play-speed" class="control-select">
-            <option value="1500" ${state.playSpeedMs === 1500 ? "selected" : ""}>Slow</option>
-            <option value="900" ${state.playSpeedMs === 900 ? "selected" : ""}>Normal</option>
-            <option value="450" ${state.playSpeedMs === 450 ? "selected" : ""}>Fast</option>
+            <option value="1800" ${state.playSpeedMs === 1800 ? "selected" : ""}>0.5x</option>
+            <option value="1200" ${state.playSpeedMs === 1200 ? "selected" : ""}>0.75x</option>
+            <option value="900" ${state.playSpeedMs === 900 ? "selected" : ""}>1x</option>
+            <option value="600" ${state.playSpeedMs === 600 ? "selected" : ""}>1.5x</option>
+            <option value="450" ${state.playSpeedMs === 450 ? "selected" : ""}>2x</option>
+            <option value="300" ${state.playSpeedMs === 300 ? "selected" : ""}>3x</option>
+            <option value="180" ${state.playSpeedMs === 180 ? "selected" : ""}>5x</option>
           </select>
         </div>
       </section>
@@ -1312,14 +1368,11 @@ function postRenderAnimate(frame: ViewerFrame): void {
       if (et === "card_play_started" || isCardPlayMove) {
         const playZoneCard = board.querySelector<HTMLElement>('[data-zone-card="play"]');
         const handPanel = board.querySelector<HTMLElement>(".hand-panel");
-        const firstHandCard = board.querySelector<HTMLElement>(".hand-card");
-        const animationTargets = [playZoneCard, handPanel, firstHandCard].filter(
-          (value): value is HTMLElement => Boolean(value),
-        );
-        animationTargets.forEach((target) => {
-          target.classList.add("anim-card-play");
-          setTimeout(() => target.classList.remove("anim-card-play"), 160);
-        });
+        const animationTarget = playZoneCard ?? handPanel;
+        if (animationTarget) {
+          animationTarget.classList.add("anim-card-play");
+          setTimeout(() => animationTarget.classList.remove("anim-card-play"), 160);
+        }
       }
       break;
     }
