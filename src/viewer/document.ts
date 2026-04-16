@@ -740,7 +740,11 @@ a {
   color: var(--danger);
 }
 
-.resource-grid,
+.resource-grid {
+  display: grid;
+  gap: 8px;
+}
+
 .zone-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
