@@ -422,7 +422,7 @@ function getTransitionDelayForEventSeq(seq: number): number {
 
   switch (event?.event_type) {
     case "card_play_started":
-      baseDelay = 180;
+      baseDelay = 320;
       break;
     case "card_moved": {
       const payload = event.payload as {
@@ -455,7 +455,7 @@ function getTransitionDelayForEventSeq(seq: number): number {
       }
 
       if (payload.to_zone === "play") {
-        baseDelay = 210;
+        baseDelay = 300;
         break;
       }
 
@@ -1509,23 +1509,32 @@ function triggerFloatingCardPlay(frame: ViewerFrame, board: HTMLElement): void {
         filter: "brightness(1)",
       },
       {
-        transform: `translate3d(${Math.round(deltaX * 0.58)}px, ${Math.round(deltaY * 0.58 - 30)}px, 0) scale(1.14) rotate(-5deg)`,
+        offset: 0.18,
+        transform: "translate3d(0, -28px, 0) scale(1.18) rotate(-6deg)",
         opacity: 1,
         filter: "brightness(1.08)",
       },
       {
+        offset: 0.42,
+        transform: "translate3d(0, -28px, 0) scale(1.18) rotate(-6deg)",
+        opacity: 1,
+        filter: "brightness(1.1)",
+      },
+      {
+        offset: 0.78,
         transform: `translate3d(${Math.round(deltaX)}px, ${Math.round(deltaY)}px, 0) scale(1.34) rotate(-2deg)`,
         opacity: 0.98,
         filter: "brightness(1.15)",
       },
       {
+        offset: 1,
         transform: `translate3d(${Math.round(deltaX)}px, ${Math.round(deltaY - 14)}px, 0) scale(1.42) rotate(0deg)`,
         opacity: 0,
         filter: "brightness(1.24)",
       },
     ],
     {
-      duration: 420,
+      duration: 760,
       easing: "cubic-bezier(0.2, 0.85, 0.18, 1)",
       fill: "forwards",
     },
@@ -1535,7 +1544,7 @@ function triggerFloatingCardPlay(frame: ViewerFrame, board: HTMLElement): void {
     window.setTimeout(() => {
       targetCard.classList.add("anim-card-play-impact");
       window.setTimeout(() => targetCard.classList.remove("anim-card-play-impact"), 220);
-    }, 240);
+    }, 470);
   }
 
   animation.addEventListener("finish", () => overlay.remove(), { once: true });
