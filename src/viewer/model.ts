@@ -244,3 +244,72 @@ export function findNextSeq(
   }
   return undefined;
 }
+
+function findContainingRootActionIndex(
+  markers: RootActionMarker[],
+  currentSeq: number,
+): number {
+  for (let index = 0; index < markers.length; index++) {
+    const marker = markers[index];
+    if (currentSeq >= marker.start_seq && currentSeq <= marker.end_seq) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+export function findPreviousActionStart(
+  markers: RootActionMarker[],
+  currentSeq: number,
+): number | undefined {
+  if (markers.length === 0) {
+    return undefined;
+  }
+
+  const containingIndex = findContainingRootActionIndex(markers, currentSeq);
+  if (containingIndex !== -1) {
+    const current = markers[containingIndex];
+    if (currentSeq > current.start_seq) {
+      return current.start_seq;
+    }
+
+    return markers[Math.max(0, containingIndex - 1)]?.start_seq;
+  }
+
+  let previousIndex = -1;
+  for (let index = 0; index < markers.length; index++) {
+    if (markers[index].start_seq >= currentSeq) {
+      break;
+    }
+    previousIndex = index;
+  }
+
+  if (previousIndex === -1) {
+    return markers[0]?.start_seq;
+  }
+
+  return markers[previousIndex]?.start_seq;
+}
+
+export function findNextActionStart(
+  markers: RootActionMarker[],
+  currentSeq: number,
+): number | undefined {
+  if (markers.length === 0) {
+    return undefined;
+  }
+
+  const containingIndex = findContainingRootActionIndex(markers, currentSeq);
+  if (containingIndex !== -1) {
+    return markers[containingIndex + 1]?.start_seq;
+  }
+
+  for (const marker of markers) {
+    if (marker.start_seq > currentSeq) {
+      return marker.start_seq;
+    }
+  }
+
+  return undefined;
+}

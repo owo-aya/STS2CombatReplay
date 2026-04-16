@@ -9,7 +9,9 @@ import type {
 import { deserializeSnapshotMap, loadBattleFromBrowserFiles } from "./browserLoader";
 import {
   createViewerModel,
+  findNextActionStart,
   findNextSeq,
+  findPreviousActionStart,
   findPreviousSeq,
   getFrameAtSeq,
   type ViewerBattleData,
@@ -403,23 +405,11 @@ function stepAction(direction: "prev" | "next"): void {
     return;
   }
 
-  const actionTargets = state.loaded.model.root_action_markers.map((marker) => marker.end_seq);
-  if (actionTargets.length === 0) {
-    return;
-  }
-
-  const currentIndex = getMarkerIndexBySeq(actionTargets, state.currentSeq);
-  if (direction === "prev") {
-    const targetIndex = currentIndex <= 0 ? 0 : currentIndex - 1;
-    setCurrentSeq(actionTargets[targetIndex]);
-    return;
-  }
-
-  const targetIndex = currentIndex < 0 ? 0 : Math.min(actionTargets.length - 1, currentIndex + 1);
-  if (targetIndex === currentIndex && state.currentSeq === actionTargets[targetIndex]) {
-    return;
-  }
-  setCurrentSeq(actionTargets[targetIndex]);
+  const nextSeq =
+    direction === "prev"
+      ? findPreviousActionStart(state.loaded.model.root_action_markers, state.currentSeq)
+      : findNextActionStart(state.loaded.model.root_action_markers, state.currentSeq);
+  setCurrentSeq(nextSeq);
 }
 
 function stepTurn(direction: "prev" | "next"): void {
@@ -457,15 +447,7 @@ function advancePlayback(): void {
   const nextSeq =
     state.playMode === "event"
       ? findNextSeq(state.loaded.model.event_seqs, current)
-      : (() => {
-          const targets = state.loaded.model.root_action_markers.map((marker) => marker.end_seq);
-          const currentIndex = getMarkerIndexBySeq(targets, current);
-          if (targets.length === 0) {
-            return undefined;
-          }
-          const nextIndex = currentIndex < 0 ? 0 : currentIndex + 1;
-          return targets[nextIndex];
-        })();
+      : findNextActionStart(state.loaded.model.root_action_markers, current);
 
   if (nextSeq === undefined) {
     stopPlayback();
@@ -859,7 +841,7 @@ function renderTimeline(frame: ViewerFrame, loaded: LoadedBattleState): string {
   )} actions near the current step.</div><div class="timeline-list">${visibleWindow.items
     .map((marker) => {
       const isActive = frame.current_root_action?.resolution_id === marker.resolution_id;
-      return `<button class="timeline-item ${isActive ? "is-active" : ""}" data-command="jump-seq" data-seq="${marker.end_seq}">
+      return `<button class="timeline-item ${isActive ? "is-active" : ""}" data-command="jump-seq" data-seq="${marker.start_seq}">
         <div class="timeline-overline">Action ${marker.index + 1} · seq ${marker.start_seq}-${marker.end_seq}</div>
         <div class="timeline-title">${escapeHtml(loaded.actionLabels[marker.index] ?? marker.label)}</div>
         <div class="timeline-copy mono">${escapeHtml(marker.resolution_id)}</div>
