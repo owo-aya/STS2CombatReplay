@@ -303,23 +303,23 @@ a {
 }
 
 .summary-bar {
-  padding: 16px 18px;
+  padding: 12px 16px;
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) auto;
-  gap: 16px;
-  align-items: start;
+  gap: 12px;
+  align-items: center;
 }
 
 .summary-main {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .summary-title {
   margin: 0;
   font-family: var(--serif);
-  font-size: clamp(1.6rem, 2.5vw, 2.3rem);
-  line-height: 0.98;
+  font-size: clamp(1.32rem, 2vw, 1.8rem);
+  line-height: 0.95;
 }
 
 .summary-subtitle {
@@ -327,9 +327,27 @@ a {
   font-size: 0.96rem;
 }
 
+.summary-inline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.summary-inline-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--line);
+  color: var(--muted-strong);
+  font-size: 0.78rem;
+}
+
 .summary-source {
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: 0.8rem;
 }
 
 .badge-row,
@@ -391,7 +409,7 @@ a {
 
 .summary-side {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   justify-items: end;
   text-align: right;
 }
@@ -404,8 +422,28 @@ a {
 
 .status-copy {
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: 0.8rem;
   max-width: 24rem;
+}
+
+.summary-bar.is-compact .badge-row {
+  gap: 8px;
+}
+
+.summary-bar.is-compact .badge {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 0.8rem;
+}
+
+.summary-bar.is-compact .summary-actions {
+  gap: 8px;
+}
+
+.summary-bar.is-compact .button-primary,
+.summary-bar.is-compact .button-ghost {
+  min-height: 34px;
+  padding: 0 12px;
 }
 
 .warning-stack {
@@ -449,10 +487,10 @@ a {
 }
 
 .controls-bar {
-  padding: 10px 12px;
+  padding: 8px 10px;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
   justify-content: space-between;
 }
@@ -460,12 +498,12 @@ a {
 .controls-group {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
 }
 
 .control-select {
-  min-height: 36px;
+  min-height: 34px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.03);
@@ -537,7 +575,7 @@ a {
 .timeline-overline,
 .moment-overline {
   color: var(--muted-strong);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   margin-bottom: 6px;
@@ -547,7 +585,7 @@ a {
 .moment-title,
 .jump-title {
   font-weight: 700;
-  line-height: 1.35;
+  line-height: 1.25;
 }
 
 .timeline-copy,
@@ -902,7 +940,7 @@ a {
 .detail-headline {
   margin: 0;
   font-family: var(--serif);
-  font-size: 1.28rem;
+  font-size: 1.16rem;
   line-height: 1.08;
 }
 
@@ -966,6 +1004,10 @@ a {
   .summary-side {
     justify-items: start;
     text-align: left;
+  }
+
+  .summary-bar {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .battle-top-grid {

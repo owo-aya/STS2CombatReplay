@@ -67,6 +67,7 @@ interface ViewerState {
   fixtures: FixtureDescriptor[];
   expandedZones: Set<string>;
   rawEventExpanded: boolean;
+  summaryExpanded: boolean;
 }
 
 const root = document.getElementById("app");
@@ -83,6 +84,7 @@ const state: ViewerState = {
   fixtures: [],
   expandedZones: new Set<string>(),
   rawEventExpanded: false,
+  summaryExpanded: false,
 };
 
 function escapeHtml(value: string): string {
@@ -186,6 +188,7 @@ function applyLoadedBattle(data: ViewerBattleData, sourceLabel: string): void {
   state.error = undefined;
   state.expandedZones.clear();
   state.rawEventExpanded = false;
+  state.summaryExpanded = false;
   state.status = `Loaded ${sourceLabel} · ${loaded.model.events.length} events`;
   render();
 }
@@ -345,6 +348,11 @@ function toggleRawEvent(): void {
   render();
 }
 
+function toggleSummary(): void {
+  state.summaryExpanded = !state.summaryExpanded;
+  render();
+}
+
 function stepEvent(direction: "prev" | "next"): void {
   if (!state.loaded || state.currentSeq === undefined) {
     return;
@@ -472,6 +480,16 @@ function renderStats(stats: BattleOverview["stats"]): string {
       (stat) =>
         `<span class="stat-pill"><strong>${escapeHtml(stat.value)}</strong>&nbsp;${escapeHtml(stat.label)}</span>`,
     )
+    .join("")}</div>`;
+}
+
+function renderCompactSummaryMeta(loaded: LoadedBattleState): string {
+  const summaryParts = [
+    loaded.overview.subtitle,
+    ...loaded.overview.stats.map((stat) => `${stat.value} ${stat.label}`),
+  ];
+  return `<div class="summary-inline-meta">${summaryParts
+    .map((part) => `<span class="summary-inline-pill">${escapeHtml(part)}</span>`)
     .join("")}</div>`;
 }
 
@@ -1009,23 +1027,35 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
   return `<div class="viewer-shell viewer-shell-loaded">
     <input id="battle-folder-input" class="hidden-input" type="file" webkitdirectory directory multiple />
     <section class="shell-top">
-      <section class="surface summary-bar">
+      <section class="surface summary-bar ${state.summaryExpanded ? "is-expanded" : "is-compact"}">
         <div class="summary-main">
           <h1 class="summary-title">${escapeHtml(loaded.overview.title)}</h1>
-          <div class="summary-subtitle">${escapeHtml(loaded.overview.subtitle)}</div>
-          <div class="summary-source">${escapeHtml(loaded.overview.source_line)}</div>
+          ${renderCompactSummaryMeta(loaded)}
           ${renderBadges(loaded.overview.badges)}
-          ${renderStats(loaded.overview.stats)}
+          ${
+            state.summaryExpanded
+              ? `<div class="summary-source">${escapeHtml(loaded.overview.source_line)}</div>${renderStats(
+                  loaded.overview.stats,
+                )}`
+              : ""
+          }
         </div>
         <div class="summary-side">
-          <div class="status-copy">${escapeHtml(state.error ?? state.status)}</div>
+          ${
+            state.summaryExpanded
+              ? `<div class="status-copy">${escapeHtml(state.error ?? state.status)}</div>`
+              : ""
+          }
           <div class="summary-actions">
+            <button class="button-ghost" data-command="toggle-summary">${
+              state.summaryExpanded ? "Hide Details" : "Show Details"
+            }</button>
             <button class="button-primary" data-command="open-folder-picker">Open Another Battle</button>
             <button class="button-ghost" data-command="open-folder-fallback">Manual Folder</button>
           </div>
         </div>
       </section>
-      ${renderWarnings(loaded.alerts)}
+      ${state.summaryExpanded ? renderWarnings(loaded.alerts) : ""}
       <section class="surface controls-bar">
         <div class="controls-group">
           <button class="control-button" data-command="step-prev-turn">Prev Turn</button>
@@ -1129,6 +1159,9 @@ root.addEventListener("click", (event) => {
     }
     case "toggle-raw-event":
       toggleRawEvent();
+      break;
+    case "toggle-summary":
+      toggleSummary();
       break;
     case "jump-seq": {
       const seqValue = target.getAttribute("data-seq");
