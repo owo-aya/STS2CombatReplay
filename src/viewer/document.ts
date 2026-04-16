@@ -1047,16 +1047,29 @@ a {
 
 /* ── Minimal flow-indicating animations ─────────────────── */
 
-/* 1. Damage: HP bar flashes red, number pulses */
-@keyframes anim-hp-damage {
-  0% { box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.6); }
-  100% { box-shadow: none; }
+/* 1. Damage: card flashes red, HP bar pulses */
+@keyframes anim-hp-damage-card {
+  0%   { background-color: rgba(220, 38, 38, 0.18); box-shadow: inset 0 0 20px rgba(220, 38, 38, 0.25); }
+  100% { background-color: transparent; box-shadow: none; }
 }
-.anim-hp-damage .hp-bar {
-  animation: anim-hp-damage 150ms ease-out;
+@keyframes anim-hp-damage-bar {
+  0%   { transform: scaleX(1); filter: brightness(1.4); }
+  50%  { transform: scaleX(1.02); filter: brightness(1.6); }
+  100% { transform: scaleX(1); filter: brightness(1); }
+}
+@keyframes anim-hp-damage-text {
+  0%   { color: #f87171; transform: scale(1.08); }
+  100% { color: inherit; transform: scale(1); }
+}
+.anim-hp-damage {
+  animation: anim-hp-damage-card 220ms ease-out;
+}
+.anim-hp-damage .hp-bar,
+.anim-hp-damage .hp-fill {
+  animation: anim-hp-damage-bar 220ms ease-out;
 }
 .anim-hp-damage .hp-copy {
-  animation: anim-hp-damage 150ms ease-out;
+  animation: anim-hp-damage-text 220ms ease-out;
 }
 
 /* 2. Block change: border flashes cyan */

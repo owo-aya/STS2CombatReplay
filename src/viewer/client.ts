@@ -1157,7 +1157,7 @@ function postRenderAnimate(frame: ViewerFrame): void {
         : null;
       if (card) {
         card.classList.add("anim-hp-damage");
-        setTimeout(() => card.classList.remove("anim-hp-damage"), 160);
+        setTimeout(() => card.classList.remove("anim-hp-damage"), 250);
       }
       break;
     }
@@ -1182,11 +1182,17 @@ function postRenderAnimate(frame: ViewerFrame): void {
       }
       break;
     }
-    case "card_play_started": {
-      const handCards = board.querySelectorAll<HTMLElement>(".hand-card");
-      if (handCards.length > 0) {
-        handCards[0]?.classList.add("anim-card-play");
-        setTimeout(() => handCards[0]?.classList.remove("anim-card-play"), 110);
+    case "card_play_started":
+    case "card_moved": {
+      const isCardPlayMove =
+        et === "card_moved" &&
+        (frame.event.payload as { to_zone?: string }).to_zone === "play";
+      if (et === "card_play_started" || isCardPlayMove) {
+        const handCards = board.querySelectorAll<HTMLElement>(".hand-card");
+        if (handCards.length > 0) {
+          handCards[0]?.classList.add("anim-card-play");
+          setTimeout(() => handCards[0]?.classList.remove("anim-card-play"), 110);
+        }
       }
       break;
     }
