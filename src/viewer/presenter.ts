@@ -449,7 +449,7 @@ export function buildStepSummary(frame: ViewerFrame): StepSummary {
   if (frame.source_snapshot_seq !== undefined) {
     meta.push(`Snapshot ${frame.source_snapshot_seq}`);
   }
-  if (frame.event.cause_event_seq !== undefined) {
+  if (frame.event.cause_event_seq != null) {
     meta.push(`Cause ${frame.event.cause_event_seq}`);
   }
 

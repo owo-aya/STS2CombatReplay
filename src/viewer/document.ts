@@ -97,8 +97,9 @@ a {
 }
 
 .viewer-shell-loaded {
-  height: calc(100vh - 36px);
-  overflow: hidden;
+  min-height: calc(100vh - 36px);
+  max-height: calc(100vh - 36px);
+  overflow: auto;
 }
 
 .surface {
@@ -513,7 +514,7 @@ a {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(220px, 260px) minmax(0, 1.25fr) minmax(240px, 300px);
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) minmax(260px, 340px);
   gap: 14px;
   flex: 1 1 auto;
   min-height: 0;
@@ -609,7 +610,7 @@ a {
 
 .battle-top-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(220px, 0.78fr);
+  grid-template-columns: minmax(0, 1.6fr) minmax(200px, 0.7fr);
   gap: 10px;
   align-items: start;
 }
@@ -775,6 +776,10 @@ a {
 .resource-section {
   display: grid;
   gap: 6px;
+  max-height: 140px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
 }
 
 .resource-section-label {
@@ -863,10 +868,12 @@ a {
 .hand-grid {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(118px, 1fr);
+  grid-auto-columns: minmax(96px, 1fr);
   gap: 8px;
   overflow-x: auto;
   padding-bottom: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
 }
 
 .hand-empty {
@@ -998,6 +1005,16 @@ a {
   font-size: 0.88rem;
   text-align: center;
   padding-bottom: 4px;
+}
+
+@media (max-width: 1400px) {
+  .workspace {
+    grid-template-columns: minmax(170px, 200px) minmax(0, 1fr) minmax(240px, 300px);
+  }
+
+  .battle-top-grid {
+    grid-template-columns: minmax(0, 1.5fr) minmax(180px, 0.7fr);
+  }
 }
 
 @media (max-width: 1180px) {
