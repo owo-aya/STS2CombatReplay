@@ -5,13 +5,23 @@ import type {
   PowerAppliedPayload,
 } from "../types/events";
 import type {
-  BattleState,
   CardInstanceState,
   EntityState,
   PowerState,
   RelicState,
 } from "../types/state";
+import { createInitialState } from "../types/state";
 import { deserializeSnapshotMap, loadBattleFromBrowserFiles } from "./browserLoader";
+import {
+  createBattleAnalytics,
+  type BattleAnalytics,
+  type BattleSummaryLeader,
+  type CardContributionGroup,
+  type CardContributionInstance,
+  type CardContributionPlay,
+  type TerminalChain,
+  type TurnDiagnosticsRow,
+} from "./analytics";
 import {
   createViewerModel,
   findContainingActionMarkerIndex,
@@ -31,6 +41,8 @@ import {
   collectViewerAlerts,
   formatActionMarkerLabel,
   formatActionLabel,
+  formatEventDetail,
+  formatEventHeadline,
   formatIntent,
   labelCard,
   labelEntity,
@@ -59,6 +71,7 @@ interface LoadedBattleState {
   overview: BattleOverview;
   keyMoments: KeyMoment[];
   alerts: ViewerAlert[];
+  analytics: BattleAnalytics;
   sourceLabel: string;
   actionMarkerLabels: string[];
   rootActionLabels: string[];
@@ -76,8 +89,10 @@ interface ViewerState {
   playTimer?: ReturnType<typeof window.setInterval>;
   fixtures: FixtureDescriptor[];
   expandedZones: Set<string>;
+  expandedCardGroups: Set<string>;
   rawEventExpanded: boolean;
   summaryExpanded: boolean;
+  activeOverlay: "summary" | "cards" | null;
   scrollPositions: Map<string, { top: number; left: number }>;
   transitionTimer?: ReturnType<typeof window.setTimeout>;
   postRenderAnimationFrame?: number;
@@ -99,8 +114,10 @@ const state: ViewerState = {
   playSpeedMs: 900,
   fixtures: [],
   expandedZones: new Set<string>(),
+  expandedCardGroups: new Set<string>(),
   rawEventExpanded: false,
   summaryExpanded: false,
+  activeOverlay: null,
   scrollPositions: new Map<string, { top: number; left: number }>(),
   isActionTransitioning: false,
   leftPanelCollapsed: false,
@@ -219,11 +236,16 @@ function getInitialSeq(model: ViewerBattleModel): number {
 
 function createLoadedState(data: ViewerBattleData, sourceLabel: string): LoadedBattleState {
   const model = createViewerModel(data);
+  const finalState =
+    model.event_seqs.length > 0
+      ? getFrameAtSeq(model, model.event_seqs[model.event_seqs.length - 1]).state
+      : createInitialState();
   return {
     model,
     overview: buildBattleOverview(model, sourceLabel),
     keyMoments: buildKeyMoments(model),
     alerts: collectViewerAlerts(model.metadata),
+    analytics: createBattleAnalytics(model, finalState),
     sourceLabel,
     actionMarkerLabels: model.action_markers.map((marker) => formatActionMarkerLabel(marker)),
     rootActionLabels: model.root_action_markers.map((marker) => formatActionLabel(marker)),
@@ -240,8 +262,10 @@ function applyLoadedBattle(data: ViewerBattleData, sourceLabel: string): void {
   state.error = undefined;
   state.scrollPositions.clear();
   state.expandedZones.clear();
+  state.expandedCardGroups.clear();
   state.rawEventExpanded = false;
   state.summaryExpanded = false;
+  state.activeOverlay = null;
   state.status = `Loaded ${sourceLabel} · ${loaded.model.events.length} events`;
   render();
 }
@@ -763,8 +787,480 @@ function renderWarnings(alerts: ViewerAlert[]): string {
     .join("")}</section>`;
 }
 
+function formatMetricValue(value: number): string {
+  if (Number.isInteger(value)) {
+    return `${value}`;
+  }
+  return value.toFixed(1);
+}
+
+function formatContributionShare(value: number): string {
+  const percent = value * 100;
+  if (percent <= 0) {
+    return "0%";
+  }
+  if (percent >= 10 || Number.isInteger(percent)) {
+    return `${Math.round(percent)}%`;
+  }
+  return `${percent.toFixed(1)}%`;
+}
+
+function renderReviewPills(items: Array<{ label: string; value: string; tone?: string }>): string {
+  return `<div class="review-pill-row">${items
+    .map(
+      (item) => `<span class="review-pill ${item.tone ? `tone-${escapeHtml(item.tone)}` : ""}">
+        <strong>${escapeHtml(item.value)}</strong>
+        <span>${escapeHtml(item.label)}</span>
+      </span>`,
+    )
+    .join("")}</div>`;
+}
+
+function getTurnStartSeq(loaded: LoadedBattleState, turnIndex: number | undefined): number | undefined {
+  if (turnIndex === undefined) {
+    return undefined;
+  }
+  return loaded.model.turn_start_markers.find((marker) => marker.turn_index === turnIndex)?.seq;
+}
+
+function renderJumpButton(seq: number | undefined, label = "Jump"): string {
+  if (seq === undefined) {
+    return "";
+  }
+
+  return `<button class="panel-toggle-button" data-command="jump-seq" data-seq="${seq}">${escapeHtml(
+    label,
+  )}</button>`;
+}
+
+function openOverlay(mode: "summary" | "cards"): void {
+  state.activeOverlay = mode;
+  render();
+}
+
+function closeOverlay(): void {
+  if (!state.activeOverlay) {
+    return;
+  }
+  state.activeOverlay = null;
+  render();
+}
+
+function toggleCardGroup(cardDefId: string): void {
+  if (state.expandedCardGroups.has(cardDefId)) {
+    state.expandedCardGroups.delete(cardDefId);
+  } else {
+    state.expandedCardGroups.add(cardDefId);
+  }
+  render();
+}
+
+function renderSummaryMetricCard(
+  label: string,
+  value: string,
+  note: string,
+  tone?: "good" | "warn" | "bad" | "sea",
+): string {
+  return `<article class="review-card review-metric-card ${tone ? `tone-${escapeHtml(tone)}` : ""}">
+    <div class="review-card-kicker">${escapeHtml(label)}</div>
+    <div class="review-card-value">${escapeHtml(value)}</div>
+    <div class="review-card-copy">${escapeHtml(note)}</div>
+  </article>`;
+}
+
+function renderLeaderCard(
+  title: string,
+  leader: BattleSummaryLeader | undefined,
+  emptyLabel: string,
+): string {
+  if (!leader) {
+    return `<article class="review-card review-leader-card is-empty">
+      <div class="review-card-kicker">${escapeHtml(title)}</div>
+      <div class="review-card-title">${escapeHtml(emptyLabel)}</div>
+      <div class="review-card-copy">No strictly attributed source in this battle.</div>
+    </article>`;
+  }
+
+  return `<article class="review-card review-leader-card">
+    <div class="review-card-top">
+      <div class="review-card-kicker">${escapeHtml(title)}</div>
+      ${renderJumpButton(leader.last_seq, "Jump")}
+    </div>
+    <div class="review-card-title">${escapeHtml(leader.label)}</div>
+    <div class="review-card-copy">${escapeHtml(leader.detail)}</div>
+    <div class="review-card-meta">${escapeHtml(
+      `${leader.source_kind.replaceAll("_", " ")} · seq ${leader.last_seq}`,
+    )}</div>
+  </article>`;
+}
+
+function renderKeyCardCard(card: CardContributionGroup): string {
+  return `<article class="review-card review-key-card">
+    <div class="review-card-top">
+      <div>
+        <div class="review-card-kicker">Key Card</div>
+        <div class="review-card-title">${escapeHtml(card.card_name)}</div>
+      </div>
+      <div class="review-share-pill">${escapeHtml(formatContributionShare(card.contribution_share))}</div>
+    </div>
+    <div class="review-card-meta mono">${escapeHtml(card.card_def_id)}</div>
+    ${renderReviewPills([
+      { label: "copies", value: formatMetricValue(card.copies_seen) },
+      { label: "draws", value: formatMetricValue(card.times_drawn) },
+      { label: "plays", value: formatMetricValue(card.times_played) },
+      { label: "damage", value: formatMetricValue(card.damage_total) },
+      { label: "block", value: formatMetricValue(card.block_total) },
+      { label: "kills", value: formatMetricValue(card.kills) },
+    ])}
+  </article>`;
+}
+
+function renderCollapseTurnCard(loaded: LoadedBattleState, row: TurnDiagnosticsRow | undefined): string {
+  if (!row) {
+    return `<article class="review-card review-collapse-card is-empty">
+      <div class="review-card-kicker">Collapse Turn</div>
+      <div class="review-card-title">No collapse turn inferred</div>
+      <div class="review-card-copy">The heuristic never found a turn where pressure rose and buffer set a new low.</div>
+    </article>`;
+  }
+
+  return `<article class="review-card review-collapse-card">
+    <div class="review-card-top">
+      <div>
+        <div class="review-card-kicker">Collapse Turn</div>
+        <div class="review-card-title">Turn ${escapeHtml(String(row.turn_index))}</div>
+      </div>
+      <span class="review-tag-pill">Heuristic</span>
+    </div>
+    <div class="review-card-copy">
+      Earliest turn where net pressure went positive while end-of-turn buffer hit a new low.
+    </div>
+    ${renderReviewPills([
+      { label: "net pressure", value: formatMetricValue(row.net_pressure), tone: row.net_pressure > 0 ? "bad" : "good" },
+      { label: "damage taken", value: formatMetricValue(row.player_damage_taken) },
+      { label: "enemy damage", value: formatMetricValue(row.enemy_damage_taken) },
+      { label: "block gained", value: formatMetricValue(row.block_gained) },
+      { label: "debuff pressure", value: formatMetricValue(row.debuffs_taken) },
+      { label: "end buffer", value: row.end_buffer === null ? "?" : formatMetricValue(row.end_buffer) },
+    ])}
+    <div class="review-card-actions">${renderJumpButton(getTurnStartSeq(loaded, row.turn_index), "Jump to Turn")}</div>
+  </article>`;
+}
+
+function renderTerminalChain(chain: TerminalChain | undefined): string {
+  if (!chain) {
+    return `<section class="drawer-section">
+      <div class="drawer-section-header">
+        <h3 class="drawer-section-title">Terminal Chain</h3>
+      </div>
+      <div class="drawer-empty">No terminal chain could be reconstructed for this battle.</div>
+    </section>`;
+  }
+
+  return `<section class="drawer-section">
+    <div class="drawer-section-header">
+      <div>
+        <h3 class="drawer-section-title">Terminal Chain</h3>
+        <div class="surface-note">${escapeHtml(chain.reason)}</div>
+      </div>
+      <div class="drawer-inline-note">${escapeHtml(
+        chain.root_action_resolution_id
+          ? `Root ${chain.root_action_resolution_id}`
+          : `Seq ${chain.start_seq}-${chain.end_seq}`,
+      )}</div>
+    </div>
+    <div class="review-card review-terminal-summary">
+      <div class="review-card-top">
+        <div>
+          <div class="review-card-kicker">${escapeHtml(chain.mode === "victory" ? "Victory" : "Defeat")}</div>
+          <div class="review-card-title">${escapeHtml(chain.subject_label)}</div>
+        </div>
+        ${chain.is_provisional ? `<span class="review-tag-pill tone-warn">Provisional</span>` : ""}
+      </div>
+      <div class="review-card-copy">Compressed to the root action that contains the final lethal event.</div>
+    </div>
+    <div class="chain-list">${chain.events
+      .map(
+        (event) => `<article class="review-card chain-item">
+          <div class="review-card-top">
+            <div class="review-card-kicker">Seq ${escapeHtml(String(event.seq))} · Turn ${escapeHtml(
+              String(event.turn_index),
+            )}</div>
+            ${renderJumpButton(event.seq)}
+          </div>
+          <div class="review-card-title">${escapeHtml(formatEventHeadline(event))}</div>
+          <div class="review-card-copy">${escapeHtml(formatEventDetail(event))}</div>
+        </article>`,
+      )
+      .join("")}</div>
+  </section>`;
+}
+
+function renderTurnDiagnosticsTable(loaded: LoadedBattleState, rows: TurnDiagnosticsRow[]): string {
+  if (rows.length === 0) {
+    return `<div class="drawer-empty">No turn diagnostics were reconstructed for this battle.</div>`;
+  }
+
+  return `<div class="diagnostic-table-wrap">
+    <table class="diagnostic-table">
+      <thead>
+        <tr>
+          <th>Turn</th>
+          <th>Damage Taken</th>
+          <th>Enemy Damage</th>
+          <th>Block</th>
+          <th>Debuffs</th>
+          <th>Net Pressure</th>
+          <th>End Buffer</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows
+        .map(
+          (row) => `<tr class="${row.is_collapse_turn ? "is-highlighted" : ""}">
+            <td>Turn ${escapeHtml(String(row.turn_index))}</td>
+            <td>${escapeHtml(formatMetricValue(row.player_damage_taken))}</td>
+            <td>${escapeHtml(formatMetricValue(row.enemy_damage_taken))}</td>
+            <td>${escapeHtml(formatMetricValue(row.block_gained))}</td>
+            <td>${escapeHtml(formatMetricValue(row.debuffs_taken))}</td>
+            <td>${escapeHtml(formatMetricValue(row.net_pressure))}</td>
+            <td>${escapeHtml(row.end_buffer === null ? "?" : formatMetricValue(row.end_buffer))}</td>
+            <td>${renderJumpButton(getTurnStartSeq(loaded, row.turn_index), "Jump")}</td>
+          </tr>`,
+        )
+        .join("")}</tbody>
+    </table>
+  </div>`;
+}
+
+function renderSummaryOverlay(loaded: LoadedBattleState): string {
+  const summary = loaded.analytics.summary;
+  const keyCards = summary.key_cards.filter((card) => card.copies_seen > 0).slice(0, 3);
+
+  return `<div class="drawer-content-stack">
+    <section class="drawer-section">
+      <div class="drawer-section-header">
+        <div>
+          <h3 class="drawer-section-title">Battle Summary</h3>
+          <div class="surface-note">Single-battle recap generated from strict event attribution.</div>
+        </div>
+        ${summary.is_provisional ? `<span class="review-tag-pill tone-warn">Provisional</span>` : ""}
+      </div>
+      <div class="review-grid review-grid-metrics">
+        ${renderSummaryMetricCard("Result", summary.result_label, summary.is_provisional ? "Battle container is incomplete or result is unknown." : "Completed battle result.", summary.is_provisional ? "warn" : "good")}
+        ${renderSummaryMetricCard("Turns", formatMetricValue(summary.turns), "Turns with reconstructed diagnostics.")}
+        ${renderSummaryMetricCard("Player Damage", formatMetricValue(summary.player_damage_dealt), "Total HP damage dealt to enemies.", "sea")}
+        ${renderSummaryMetricCard("Damage Taken", formatMetricValue(summary.player_damage_taken), "Total HP damage received by the player.", "bad")}
+        ${renderSummaryMetricCard("Block Gained", formatMetricValue(summary.player_block_gained), "Positive block gain events on the player.", "good")}
+        ${renderSummaryMetricCard("Cards Played", formatMetricValue(summary.cards_played), "Player card play starts recorded in the log.")}
+      </div>
+    </section>
+    <section class="drawer-section">
+      <div class="drawer-section-header">
+        <h3 class="drawer-section-title">Leaders</h3>
+      </div>
+      <div class="review-grid review-grid-leaders">
+        ${renderLeaderCard("Highest Damage Source", summary.highest_damage_source, "No damage source")}
+        ${renderLeaderCard("Highest Block Source", summary.highest_block_source, "No block source")}
+        ${renderLeaderCard("Highest Enemy Pressure", summary.highest_enemy_pressure_source, "No enemy pressure source")}
+        ${renderCollapseTurnCard(loaded, summary.collapse_turn)}
+      </div>
+    </section>
+    <section class="drawer-section">
+      <div class="drawer-section-header">
+        <h3 class="drawer-section-title">Key Cards</h3>
+        <div class="drawer-inline-note">${escapeHtml(String(keyCards.length))} shown</div>
+      </div>
+      ${
+        keyCards.length > 0
+          ? `<div class="review-grid review-grid-keycards">${keyCards.map(renderKeyCardCard).join("")}</div>`
+          : `<div class="drawer-empty">No player cards were reconstructed from this battle.</div>`
+      }
+    </section>
+    <section class="drawer-section">
+      <div class="drawer-section-header">
+        <h3 class="drawer-section-title">Turn Diagnostics</h3>
+        <div class="drawer-inline-note">Pressure heuristic per turn</div>
+      </div>
+      ${renderTurnDiagnosticsTable(loaded, loaded.analytics.turns)}
+    </section>
+    ${renderTerminalChain(loaded.analytics.terminal_chain)}
+  </div>`;
+}
+
+function renderCardContributionInstance(instance: CardContributionInstance): string {
+  const instanceTags: string[] = [];
+  if (instance.created_this_combat) {
+    instanceTags.push("Created");
+  }
+  if (instance.temporary) {
+    instanceTags.push("Temporary");
+  }
+  if (instance.current_upgrade_level > 0) {
+    instanceTags.push(`Upgrade ${instance.current_upgrade_level}`);
+  }
+  if (instance.zones_seen.length > 0) {
+    instanceTags.push(instance.zones_seen.join(" / "));
+  }
+
+  return `<article class="review-card card-instance-card">
+    <div class="review-card-top">
+      <div>
+        <div class="review-card-kicker">Instance</div>
+        <div class="review-card-title">${escapeHtml(instance.card_name)}</div>
+      </div>
+      <div class="review-card-meta mono">${escapeHtml(instance.card_instance_id)}</div>
+    </div>
+    <div class="review-card-copy">${escapeHtml(
+      instanceTags.length > 0 ? instanceTags.join(" · ") : "No creation or upgrade markers.",
+    )}</div>
+    ${renderReviewPills([
+      { label: "draws", value: formatMetricValue(instance.times_drawn) },
+      { label: "plays", value: formatMetricValue(instance.times_played) },
+      { label: "damage", value: formatMetricValue(instance.damage_total) },
+      { label: "block", value: formatMetricValue(instance.block_total) },
+      { label: "power", value: formatMetricValue(instance.power_events) },
+      { label: "generated", value: formatMetricValue(instance.generated_cards) },
+      { label: "kills", value: formatMetricValue(instance.kills) },
+    ])}
+    ${
+      instance.plays.length > 0
+        ? `<div class="card-play-list">${instance.plays.map(renderCardContributionPlay).join("")}</div>`
+        : `<div class="drawer-empty drawer-empty-inline">No play events were attributed to this copy.</div>`
+    }
+  </article>`;
+}
+
+function renderCardContributionPlay(play: CardContributionPlay): string {
+  const targetText = play.target_labels.length > 0 ? play.target_labels.join(", ") : "No explicit targets";
+  return `<article class="review-card card-play-card">
+    <div class="review-card-top">
+      <div>
+        <div class="review-card-kicker">Play</div>
+        <div class="review-card-title">Turn ${escapeHtml(String(play.turn_index ?? "?"))} · Seq ${escapeHtml(
+          String(play.seq),
+        )}</div>
+      </div>
+      ${renderJumpButton(play.seq)}
+    </div>
+    <div class="review-card-copy">${escapeHtml(targetText)}</div>
+    ${renderReviewPills([
+      { label: "energy", value: play.energy_cost_paid === undefined ? "?" : formatMetricValue(play.energy_cost_paid) },
+      { label: "damage", value: formatMetricValue(play.damage_total) },
+      { label: "block", value: formatMetricValue(play.block_total) },
+      { label: "power", value: formatMetricValue(play.power_events) },
+      { label: "stacks", value: formatMetricValue(play.power_stacks) },
+      { label: "generated", value: formatMetricValue(play.generated_cards) },
+      { label: "kills", value: formatMetricValue(play.kills) },
+    ])}
+  </article>`;
+}
+
+function renderCardContributionGroup(group: CardContributionGroup): string {
+  const isExpanded = state.expandedCardGroups.has(group.card_def_id);
+  const headerTags: string[] = [];
+  if (group.has_created_copy) {
+    headerTags.push("Created Copy");
+  }
+  if (group.has_temporary_copy) {
+    headerTags.push("Temporary");
+  }
+  if (group.highest_upgrade_level > 0) {
+    headerTags.push(`Upgrade ${group.highest_upgrade_level}`);
+  }
+
+  return `<article class="review-card card-group-card ${isExpanded ? "is-expanded" : ""} ${
+    group.contribution_score === 0 ? "is-zero" : ""
+  }">
+    <div class="review-card-top">
+      <div>
+        <div class="review-card-kicker">Card Contribution</div>
+        <div class="review-card-title">${escapeHtml(group.card_name)}</div>
+        <div class="review-card-meta mono">${escapeHtml(group.card_def_id)}</div>
+      </div>
+      <div class="card-group-actions">
+        <div class="review-share-pill">${escapeHtml(formatContributionShare(group.contribution_share))}</div>
+        <button class="panel-toggle-button" data-command="toggle-card-group" data-card-def-id="${escapeHtml(
+          group.card_def_id,
+        )}">
+          ${escapeHtml(isExpanded ? "Collapse" : "Expand")}
+        </button>
+      </div>
+    </div>
+    <div class="review-card-copy">${escapeHtml(
+      headerTags.length > 0 ? headerTags.join(" · ") : "Seen during this battle.",
+    )}</div>
+    ${renderReviewPills([
+      { label: "copies", value: formatMetricValue(group.copies_seen) },
+      { label: "draws", value: formatMetricValue(group.times_drawn) },
+      { label: "plays", value: formatMetricValue(group.times_played) },
+      { label: "damage", value: formatMetricValue(group.damage_total) },
+      { label: "block", value: formatMetricValue(group.block_total) },
+      { label: "power", value: formatMetricValue(group.power_events) },
+      { label: "stacks", value: formatMetricValue(group.power_stacks) },
+      { label: "generated", value: formatMetricValue(group.generated_cards) },
+      { label: "kills", value: formatMetricValue(group.kills) },
+    ])}
+    ${
+      isExpanded
+        ? `<div class="card-instance-list">${group.instances.map(renderCardContributionInstance).join("")}</div>`
+        : ""
+    }
+  </article>`;
+}
+
+function renderCardsOverlay(loaded: LoadedBattleState): string {
+  const cards = loaded.analytics.cards;
+  return `<div class="drawer-content-stack">
+    <section class="drawer-section">
+      <div class="drawer-section-header">
+        <div>
+          <h3 class="drawer-section-title">Card Contribution</h3>
+          <div class="surface-note">Grouped by card definition, using only strict in-log attribution.</div>
+        </div>
+        <div class="drawer-inline-note">${escapeHtml(String(cards.length))} card groups</div>
+      </div>
+      ${
+        cards.length > 0
+          ? `<div class="card-group-list">${cards.map(renderCardContributionGroup).join("")}</div>`
+          : `<div class="drawer-empty">No player-owned cards were reconstructed for this battle.</div>`
+      }
+    </section>
+  </div>`;
+}
+
+function renderOverlay(loaded: LoadedBattleState): string {
+  if (!state.activeOverlay) {
+    return "";
+  }
+
+  const summary = loaded.analytics.summary;
+  const title = state.activeOverlay === "summary" ? "Battle Summary" : "Card Contribution";
+
+  return `<aside class="viewer-drawer viewer-drawer-${escapeHtml(state.activeOverlay)}" data-scroll-key="viewer-drawer">
+    <div class="viewer-drawer-header">
+      <div>
+        <div class="drawer-kicker">Single Battle Review</div>
+        <h2 class="drawer-title">${escapeHtml(title)}</h2>
+        <div class="drawer-copy">${escapeHtml(
+          `${loaded.overview.title} · ${summary.result_label}${summary.is_provisional ? " · Provisional" : ""}`,
+        )}</div>
+      </div>
+      <div class="viewer-drawer-actions">
+        <button class="button-ghost ${state.activeOverlay === "summary" ? "is-active" : ""}" data-command="open-overlay" data-overlay-mode="summary">Summary</button>
+        <button class="button-ghost ${state.activeOverlay === "cards" ? "is-active" : ""}" data-command="open-overlay" data-overlay-mode="cards">Cards</button>
+        <button class="panel-toggle-button" data-command="close-overlay">Close</button>
+      </div>
+    </div>
+    <div class="viewer-drawer-body">
+      ${state.activeOverlay === "summary" ? renderSummaryOverlay(loaded) : renderCardsOverlay(loaded)}
+    </div>
+  </aside>`;
+}
+
 function renderPanelDock(): string {
-  if (!state.leftPanelCollapsed && !state.rightPanelCollapsed) {
+  const overlayHidesInspector = state.activeOverlay !== null;
+  if (!state.leftPanelCollapsed && (!state.rightPanelCollapsed || overlayHidesInspector)) {
     return "";
   }
 
@@ -774,7 +1270,7 @@ function renderPanelDock(): string {
       `<button class="panel-dock-button" data-command="toggle-left-panel">Show Navigation</button>`,
     );
   }
-  if (state.rightPanelCollapsed) {
+  if (state.rightPanelCollapsed && !overlayHidesInspector) {
     buttons.push(
       `<button class="panel-dock-button" data-command="toggle-right-panel">Show Inspector</button>`,
     );
@@ -1323,6 +1819,14 @@ function renderEmptyState(): string {
 }
 
 function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): string {
+  const overlayHidesInspector = state.activeOverlay !== null;
+  const shellClassNames = [
+    "viewer-shell",
+    "viewer-shell-loaded",
+    state.activeOverlay ? "has-overlay" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const workspaceClassNames = [
     "workspace",
     state.leftPanelCollapsed ? "is-left-collapsed" : "",
@@ -1331,7 +1835,7 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
     .filter(Boolean)
     .join(" ");
 
-  return `<div class="viewer-shell viewer-shell-loaded">
+  return `<div class="${shellClassNames}">
     <input id="battle-folder-input" class="hidden-input" type="file" webkitdirectory directory multiple />
     <section class="shell-top">
       <section class="surface summary-bar ${state.summaryExpanded ? "is-expanded" : "is-compact"}">
@@ -1354,6 +1858,8 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
               : ""
           }
           <div class="summary-actions">
+            <button class="button-ghost ${state.activeOverlay === "summary" ? "is-active" : ""}" data-command="open-overlay" data-overlay-mode="summary">Summary</button>
+            <button class="button-ghost ${state.activeOverlay === "cards" ? "is-active" : ""}" data-command="open-overlay" data-overlay-mode="cards">Cards</button>
             <button class="button-ghost" data-command="toggle-summary">${
               state.summaryExpanded ? "Hide Details" : "Show Details"
             }</button>
@@ -1432,7 +1938,7 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
         ${renderPanelDock()}
       </section>
       ${
-        state.rightPanelCollapsed
+        state.rightPanelCollapsed || overlayHidesInspector
           ? ""
           : `<aside class="surface panel panel-right scroll-panel" data-scroll-key="panel-right">
               ${renderPanelToolbar(
@@ -1450,6 +1956,7 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
             </aside>`
       }
     </main>
+    ${renderOverlay(loaded)}
   </div>`;
 }
 
@@ -1693,6 +2200,23 @@ root.addEventListener("click", (event) => {
     case "toggle-summary":
       toggleSummary();
       break;
+    case "open-overlay": {
+      const overlayMode = target.getAttribute("data-overlay-mode");
+      if (overlayMode === "summary" || overlayMode === "cards") {
+        openOverlay(overlayMode);
+      }
+      break;
+    }
+    case "close-overlay":
+      closeOverlay();
+      break;
+    case "toggle-card-group": {
+      const cardDefId = target.getAttribute("data-card-def-id");
+      if (cardDefId) {
+        toggleCardGroup(cardDefId);
+      }
+      break;
+    }
     case "toggle-left-panel":
       togglePanel("left");
       break;
@@ -1777,6 +2301,12 @@ document.addEventListener("keydown", (event) => {
   if (event.key === " ") {
     event.preventDefault();
     togglePlayback();
+    return;
+  }
+
+  if (event.key === "Escape" && state.activeOverlay) {
+    event.preventDefault();
+    closeOverlay();
     return;
   }
 
