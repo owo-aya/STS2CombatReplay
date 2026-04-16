@@ -1,5 +1,9 @@
 import type { Snapshot } from "../types/snapshot";
-import type { DamageAttemptPayload, PowerAppliedPayload } from "../types/events";
+import type {
+  CardPlayStartedPayload,
+  DamageAttemptPayload,
+  PowerAppliedPayload,
+} from "../types/events";
 import type {
   BattleState,
   CardInstanceState,
@@ -115,6 +119,13 @@ function escapeHtml(value: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll("\"", "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function escapeSelector(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
 
 function getApiUrl(relativePath: string): string {
@@ -1442,6 +1453,95 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
   </div>`;
 }
 
+function triggerFloatingCardPlay(frame: ViewerFrame, board: HTMLElement): void {
+  const payload = frame.event.payload as CardPlayStartedPayload;
+  const cardInstanceId = payload.card_instance_id;
+  if (!cardInstanceId) {
+    return;
+  }
+
+  const sourceCard = board.querySelector<HTMLElement>(
+    `.hand-card[data-card="${escapeSelector(cardInstanceId)}"]`,
+  );
+  if (!sourceCard) {
+    return;
+  }
+
+  const sourceRect = sourceCard.getBoundingClientRect();
+  if (sourceRect.width <= 0 || sourceRect.height <= 0) {
+    return;
+  }
+
+  const boardRect = board.getBoundingClientRect();
+  const primaryTargetId = payload.target_entity_ids?.[0];
+  const targetCard = primaryTargetId
+    ? board.querySelector<HTMLElement>(
+        `.enemy-card[data-entity="${escapeSelector(primaryTargetId)}"], .player-card[data-entity="${escapeSelector(primaryTargetId)}"]`,
+      )
+    : null;
+  const targetRect = targetCard?.getBoundingClientRect();
+
+  const overlay = sourceCard.cloneNode(true) as HTMLElement;
+  overlay.classList.add("card-play-overlay");
+  overlay.style.left = `${sourceRect.left}px`;
+  overlay.style.top = `${sourceRect.top}px`;
+  overlay.style.width = `${sourceRect.width}px`;
+  overlay.style.height = `${sourceRect.height}px`;
+  document.body.appendChild(overlay);
+
+  const startCenterX = sourceRect.left + sourceRect.width / 2;
+  const startCenterY = sourceRect.top + sourceRect.height / 2;
+  const endCenterX = targetRect
+    ? targetRect.left + targetRect.width / 2
+    : boardRect.left + boardRect.width * 0.5;
+  const endCenterY = targetRect
+    ? Math.min(boardRect.top + boardRect.height * 0.4, targetRect.top + targetRect.height * 0.45)
+    : boardRect.top + boardRect.height * 0.34;
+
+  const deltaX = endCenterX - startCenterX;
+  const deltaY = endCenterY - startCenterY;
+
+  const animation = overlay.animate(
+    [
+      {
+        transform: "translate3d(0, 0, 0) scale(1) rotate(0deg)",
+        opacity: 1,
+        filter: "brightness(1)",
+      },
+      {
+        transform: `translate3d(${Math.round(deltaX * 0.58)}px, ${Math.round(deltaY * 0.58 - 30)}px, 0) scale(1.14) rotate(-5deg)`,
+        opacity: 1,
+        filter: "brightness(1.08)",
+      },
+      {
+        transform: `translate3d(${Math.round(deltaX)}px, ${Math.round(deltaY)}px, 0) scale(1.34) rotate(-2deg)`,
+        opacity: 0.98,
+        filter: "brightness(1.15)",
+      },
+      {
+        transform: `translate3d(${Math.round(deltaX)}px, ${Math.round(deltaY - 14)}px, 0) scale(1.42) rotate(0deg)`,
+        opacity: 0,
+        filter: "brightness(1.24)",
+      },
+    ],
+    {
+      duration: 420,
+      easing: "cubic-bezier(0.2, 0.85, 0.18, 1)",
+      fill: "forwards",
+    },
+  );
+
+  if (targetCard) {
+    window.setTimeout(() => {
+      targetCard.classList.add("anim-card-play-impact");
+      window.setTimeout(() => targetCard.classList.remove("anim-card-play-impact"), 220);
+    }, 240);
+  }
+
+  animation.addEventListener("finish", () => overlay.remove(), { once: true });
+  animation.addEventListener("cancel", () => overlay.remove(), { once: true });
+}
+
 function render(): void {
   stopPostRenderAnimationFrame();
   captureScrollPositions();
@@ -1502,28 +1602,8 @@ function postRenderAnimate(frame: ViewerFrame): void {
       }
       break;
     }
-    case "card_play_started":
-    case "card_moved": {
-      const isCardPlayMove =
-        et === "card_moved" &&
-        (frame.event.payload as { to_zone?: string }).to_zone === "play";
-      if (et === "card_play_started" || isCardPlayMove) {
-        const playZoneCard = board.querySelector<HTMLElement>('[data-zone-card="play"]');
-        const handPanel = board.querySelector<HTMLElement>(".hand-panel");
-        const firstHandCard = board.querySelector<HTMLElement>(".hand-card");
-        const animationTargets = [handPanel, playZoneCard, firstHandCard].filter(
-          (target, index, values): target is HTMLElement =>
-            target instanceof HTMLElement && values.indexOf(target) === index,
-        );
-        animationTargets.forEach((target) => target.classList.add("anim-card-play"));
-        if (animationTargets.length > 0) {
-          board.classList.add("anim-card-play-board");
-          setTimeout(() => {
-            animationTargets.forEach((target) => target.classList.remove("anim-card-play"));
-            board.classList.remove("anim-card-play-board");
-          }, 260);
-        }
-      }
+    case "card_play_started": {
+      triggerFloatingCardPlay(frame, board);
       break;
     }
     case "power_applied":

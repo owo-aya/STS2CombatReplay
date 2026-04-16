@@ -1343,40 +1343,24 @@ a {
   animation: anim-entity-die 200ms ease-in-out forwards;
 }
 
-/* 4. Card played: brief border highlight + micro-lift */
-@keyframes anim-card-play {
-  0%   {
-    box-shadow:
-      0 0 0 2px rgba(255, 208, 135, 0.92),
-      0 0 28px rgba(240, 181, 106, 0.5),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.12);
-    transform: translateY(-6px) scale(1.02);
-    filter: brightness(1.08);
-  }
-  45%  {
-    box-shadow:
-      0 0 0 3px rgba(255, 208, 135, 0.85),
-      0 0 42px rgba(240, 181, 106, 0.72),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.18);
-    transform: translateY(-2px) scale(1.03);
-    filter: brightness(1.16);
-  }
-  100% {
-    box-shadow: none;
-    transform: translateY(0) scale(1);
-    filter: brightness(1);
-  }
+/* 4. Card played: focused floating card + target impact */
+.card-play-overlay {
+  position: fixed;
+  margin: 0;
+  pointer-events: none;
+  z-index: 9999;
+  will-change: transform, opacity, filter;
+  box-shadow:
+    0 20px 44px rgba(0, 0, 0, 0.38),
+    0 0 36px rgba(240, 181, 106, 0.26);
 }
-.anim-card-play {
-  animation: anim-card-play 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+@keyframes anim-card-play-impact {
+  0%   { box-shadow: 0 0 0 0 rgba(240, 181, 106, 0); transform: scale(1); }
+  45%  { box-shadow: 0 0 0 3px rgba(240, 181, 106, 0.42), 0 0 34px rgba(240, 181, 106, 0.3); transform: scale(1.03); }
+  100% { box-shadow: 0 0 0 0 rgba(240, 181, 106, 0); transform: scale(1); }
 }
-@keyframes anim-card-play-board {
-  0%   { box-shadow: inset 0 0 0 0 rgba(240, 181, 106, 0); }
-  35%  { box-shadow: inset 0 0 0 2px rgba(240, 181, 106, 0.28); }
-  100% { box-shadow: inset 0 0 0 0 rgba(240, 181, 106, 0); }
-}
-.anim-card-play-board {
-  animation: anim-card-play-board 240ms ease-out;
+.anim-card-play-impact {
+  animation: anim-card-play-impact 220ms ease-out;
 }
 
 /* 5. Power applied/removed: slide-in + fade */
@@ -1411,11 +1395,15 @@ a {
   .anim-hp-damage,
   .anim-block-change,
   .anim-entity-die,
-  .anim-card-play,
+  .anim-card-play-impact,
   .anim-power-change,
   .anim-orb-evoke,
   .anim-hp-tick {
     animation: none !important;
+  }
+
+  .card-play-overlay {
+    display: none !important;
   }
 }
 `;
