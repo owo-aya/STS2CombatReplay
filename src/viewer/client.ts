@@ -610,7 +610,7 @@ function renderResourcePills(entity: EntityState): string {
 }
 
 function renderEnemyCard(enemy: EntityState): string {
-  return `<article class="enemy-card ${enemy.alive ? "" : "is-dead"}">
+  return `<article class="enemy-card ${enemy.alive ? "" : "is-dead"}" data-entity="${escapeHtml(enemy.entity_id)}">
     <div class="enemy-top">
       <div>
         <div class="enemy-name">${escapeHtml(labelEntity(enemy))}</div>
@@ -631,7 +631,7 @@ function renderEnemyCard(enemy: EntityState): string {
 }
 
 function renderPlayerCard(player: EntityState): string {
-  return `<article class="actor-card player-card ${player.alive ? "" : "is-dead"}">
+  return `<article class="actor-card player-card ${player.alive ? "" : "is-dead"}" data-entity="${escapeHtml(player.entity_id)}">
     <div class="actor-top">
       <div>
         <div class="actor-name">${escapeHtml(labelEntity(player))}</div>

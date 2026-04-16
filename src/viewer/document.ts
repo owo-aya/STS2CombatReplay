@@ -1045,24 +1045,84 @@ a {
   }
 }
 
-@media (max-width: 920px) {
-  .hero-grid,
-  .load-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+/* ── Minimal flow-indicating animations ─────────────────── */
 
-  .viewer-root {
-    padding: 12px;
-  }
+/* 1. Damage: HP bar flashes red, number pulses */
+@keyframes anim-hp-damage {
+  0% { box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.6); }
+  100% { box-shadow: none; }
+}
+.anim-hp-damage .hp-bar {
+  animation: anim-hp-damage 150ms ease-out;
+}
+.anim-hp-damage .hp-copy {
+  animation: anim-hp-damage 150ms ease-out;
+}
 
-  .hero,
-  .summary-bar,
-  .panel {
-    padding: 18px;
-  }
+/* 2. Block change: border flashes cyan */
+@keyframes anim-block-change {
+  0% { box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.5); }
+  100% { box-shadow: none; }
+}
+.anim-block-change .is-block {
+  animation: anim-block-change 120ms ease-out;
+}
 
-  .controls-bar {
-    padding: 12px;
+/* 3. Entity death: fade out + desaturate */
+@keyframes anim-entity-die {
+  from { opacity: 1; filter: grayscale(0); }
+  to   { opacity: 0.35; filter: grayscale(0.8); }
+}
+.anim-entity-die {
+  animation: anim-entity-die 200ms ease-in-out forwards;
+}
+
+/* 4. Card played: brief border highlight + micro-lift */
+@keyframes anim-card-play {
+  0%   { box-shadow: 0 0 0 2px var(--accent), transform: translateY(-2px); }
+  100% { box-shadow: none; transform: translateY(0); }
+}
+.anim-card-play {
+  animation: anim-card-play 100ms ease-out;
+}
+
+/* 5. Power applied/removed: slide-in + fade */
+@keyframes anim-power-change {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.anim-power-change .mini-row:last-of-type .mini-pill {
+  animation: anim-power-change 150ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+/* 6. Orb evoked: brief glow flash on orb section */
+@keyframes anim-orb-evoke {
+  0%   { box-shadow: inset 0 0 12px rgba(168, 85, 247, 0.4); }
+  100% { box-shadow: none; }
+}
+.anim-orb-evoke .resource-section:nth-child(2) {
+  animation: anim-orb-evoke 150ms ease-out;
+}
+
+/* 7. HP number tick (independent of damage): subtle scale pulse */
+@keyframes anim-hp-tick {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.06); }
+}
+.anim-hp-tick .hp-copy {
+  animation: anim-hp-tick 200ms ease-in-out;
+}
+
+/* Reduced motion: disable all animations */
+@media (prefers-reduced-motion: reduce) {
+  .anim-hp-damage,
+  .anim-block-change,
+  .anim-entity-die,
+  .anim-card-play,
+  .anim-power-change,
+  .anim-orb-evoke,
+  .anim-hp-tick {
+    animation: none !important;
   }
 }
 `;
