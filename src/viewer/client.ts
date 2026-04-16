@@ -65,6 +65,8 @@ interface ViewerState {
   playSpeedMs: number;
   playTimer?: ReturnType<typeof window.setInterval>;
   fixtures: FixtureDescriptor[];
+  expandedZones: Set<string>;
+  rawEventExpanded: boolean;
 }
 
 const root = document.getElementById("app");
@@ -79,6 +81,8 @@ const state: ViewerState = {
   playMode: "action",
   playSpeedMs: 900,
   fixtures: [],
+  expandedZones: new Set<string>(),
+  rawEventExpanded: false,
 };
 
 function escapeHtml(value: string): string {
@@ -180,6 +184,8 @@ function applyLoadedBattle(data: ViewerBattleData, sourceLabel: string): void {
   state.loaded = loaded;
   state.currentSeq = getInitialSeq(loaded.model);
   state.error = undefined;
+  state.expandedZones.clear();
+  state.rawEventExpanded = false;
   state.status = `Loaded ${sourceLabel} · ${loaded.model.events.length} events`;
   render();
 }
@@ -303,6 +309,40 @@ function getMarkerIndexBySeq(values: number[], seq: number): number {
     }
   }
   return currentIndex;
+}
+
+function getVisibleWindow<T>(
+  items: T[],
+  activeIndex: number,
+  before: number,
+  after: number,
+): { items: T[]; start: number; end: number } {
+  if (items.length === 0) {
+    return { items: [], start: 0, end: 0 };
+  }
+
+  const safeIndex = Math.max(0, Math.min(items.length - 1, activeIndex));
+  const start = Math.max(0, safeIndex - before);
+  const end = Math.min(items.length, safeIndex + after + 1);
+  return {
+    items: items.slice(start, end),
+    start,
+    end,
+  };
+}
+
+function toggleZone(zoneName: string): void {
+  if (state.expandedZones.has(zoneName)) {
+    state.expandedZones.delete(zoneName);
+  } else {
+    state.expandedZones.add(zoneName);
+  }
+  render();
+}
+
+function toggleRawEvent(): void {
+  state.rawEventExpanded = !state.rawEventExpanded;
+  render();
 }
 
 function stepEvent(direction: "prev" | "next"): void {
@@ -463,17 +503,23 @@ function renderPowerChips(powers: Record<string, PowerState>): string {
     const rightLabel = right.power_name ?? right.power_id;
     return leftLabel.localeCompare(rightLabel);
   });
+  const visibleEntries = entries.slice(0, 4);
 
   if (entries.length === 0) {
     return `<span class="mini-pill">No powers</span>`;
   }
 
-  return entries
+  return visibleEntries
     .map(
       (power) =>
         `<span class="mini-pill">${escapeHtml(power.power_name ?? power.power_id)} ${escapeHtml(
           String(power.stacks),
         )}</span>`,
+    )
+    .concat(
+      entries.length > visibleEntries.length
+        ? [`<span class="mini-pill">+${escapeHtml(String(entries.length - visibleEntries.length))} more</span>`]
+        : [],
     )
     .join("");
 }
@@ -617,11 +663,7 @@ function renderHand(frame: ViewerFrame): string {
     .join("")}</div>`;
 }
 
-function getZonePreview(
-  zoneName: string,
-  cardIds: string[],
-  cards: Map<string, CardInstanceState>,
-): string {
+function getZonePreview(cardIds: string[], cards: Map<string, CardInstanceState>): string {
   if (cardIds.length === 0) {
     return "Empty.";
   }
@@ -634,8 +676,31 @@ function getZonePreview(
   return `${preview}${remainder}.`;
 }
 
+function renderZoneContents(
+  zoneName: string,
+  cardIds: string[],
+  cards: Map<string, CardInstanceState>,
+): string {
+  if (cardIds.length === 0) {
+    return "";
+  }
+
+  return `<div class="pile-detail">
+    <div class="pile-detail-label">${escapeHtml(zoneName === "draw" ? "Top to Bottom" : "Current Order")}</div>
+    <div class="pile-list">${cardIds
+      .map((cardId, index) => {
+        const card = cards.get(cardId);
+        return `<div class="pile-item">
+          <span class="pile-index mono">${escapeHtml(String(index + 1))}</span>
+          <span>${escapeHtml(labelCard(card, cardId))}</span>
+        </div>`;
+      })
+      .join("")}</div>
+  </div>`;
+}
+
 function renderZoneGrid(frame: ViewerFrame): string {
-  const orderedZoneNames = ["draw", "discard", "play", "exhaust", "limbo", "reveal", "void", "removed", "unknown"];
+  const orderedZoneNames = ["draw", "discard", "exhaust", "play", "limbo", "reveal", "void", "removed", "unknown"];
   const zoneEntries = orderedZoneNames
     .map((zoneName) => ({
       zoneName,
@@ -644,15 +709,22 @@ function renderZoneGrid(frame: ViewerFrame): string {
     .filter((entry) => entry.cards.length > 0 || ["draw", "discard", "play", "exhaust"].includes(entry.zoneName));
 
   return `<section class="zone-grid">${zoneEntries
-    .map(
-      (entry) => `<article class="zone-card">
+    .map((entry) => {
+      const isExpanded = state.expandedZones.has(entry.zoneName);
+      const isExpandable = entry.cards.length > 0;
+      return `<button
+        class="zone-card zone-card-button ${isExpanded ? "is-expanded" : ""}"
+        ${isExpandable ? `data-command="toggle-zone" data-zone="${escapeHtml(entry.zoneName)}"` : "disabled"}
+      >
         <h3 class="zone-title">${escapeHtml(entry.zoneName)}</h3>
         <div class="zone-copy">${escapeHtml(String(entry.cards.length))} cards</div>
-        <div class="zone-copy">${escapeHtml(
-          getZonePreview(entry.zoneName, entry.cards, frame.state.cards),
+        <div class="zone-copy">${escapeHtml(getZonePreview(entry.cards, frame.state.cards))}</div>
+        <div class="zone-hint">${escapeHtml(
+          isExpandable ? (isExpanded ? "Click to collapse" : "Click to expand") : "No cards",
         )}</div>
-      </article>`,
-    )
+        ${isExpanded ? renderZoneContents(entry.zoneName, entry.cards, frame.state.cards) : ""}
+      </button>`;
+    })
     .join("")}</section>`;
 }
 
@@ -664,27 +736,30 @@ function renderResourceCards(frame: ViewerFrame): string {
 
   return `<section class="resource-grid">
     <article class="resource-card">
-      <h3 class="resource-title">Potions</h3>
-      <div class="chip-row">${
-        potionEntries.length > 0
-          ? potionEntries
-              .map(
-                (potion) =>
-                  `<span class="mini-pill">${escapeHtml(labelPotion(potion))} · slot ${escapeHtml(
-                    String(potion.slot_index),
-                  )} · ${escapeHtml(potion.state)}</span>`,
-              )
-              .join("")
-          : `<span class="mini-pill">No potions</span>`
-      }</div>
-    </article>
-    <article class="resource-card">
-      <h3 class="resource-title">Player Orbs</h3>
-      <div class="chip-row">${player ? renderOrbChips(player.orbs) : `<span class="mini-pill">No player</span>`}</div>
-    </article>
-    <article class="resource-card">
-      <h3 class="resource-title">Player Relics</h3>
-      <div class="chip-row">${player ? renderRelicChips(player.relics) : `<span class="mini-pill">No player</span>`}</div>
+      <h3 class="resource-title">Battle Resources</h3>
+      <div class="resource-section">
+        <div class="resource-section-label">Potions</div>
+        <div class="chip-row">${
+          potionEntries.length > 0
+            ? potionEntries
+                .map(
+                  (potion) =>
+                    `<span class="mini-pill">${escapeHtml(labelPotion(potion))} · slot ${escapeHtml(
+                      String(potion.slot_index),
+                    )} · ${escapeHtml(potion.state)}</span>`,
+                )
+                .join("")
+            : `<span class="mini-pill">No potions</span>`
+        }</div>
+      </div>
+      <div class="resource-section">
+        <div class="resource-section-label">Orbs</div>
+        <div class="chip-row">${player ? renderOrbChips(player.orbs) : `<span class="mini-pill">No player</span>`}</div>
+      </div>
+      <div class="resource-section">
+        <div class="resource-section-label">Relics</div>
+        <div class="chip-row">${player ? renderRelicChips(player.relics) : `<span class="mini-pill">No player</span>`}</div>
+      </div>
     </article>
   </section>`;
 }
@@ -697,14 +772,20 @@ function renderArena(frame: ViewerFrame): string {
     .sort((left, right) => left.entity_id.localeCompare(right.entity_id));
 
   return `<section class="arena">
-    <section class="enemy-grid">${
-      enemies.length > 0
-        ? enemies.map(renderEnemyCard).join("")
-        : `<article class="enemy-card"><div class="enemy-name">No enemies</div><div class="enemy-subline">This frame has no active enemies.</div></article>`
-    }</section>
-    ${player ? renderPlayerCard(player) : `<article class="actor-card"><div class="actor-name">No player entity</div></article>`}
-    ${renderResourceCards(frame)}
-    ${renderZoneGrid(frame)}
+    <section class="battle-top-grid">
+      <div class="actor-stack">
+        <section class="enemy-grid">${
+          enemies.length > 0
+            ? enemies.map(renderEnemyCard).join("")
+            : `<article class="enemy-card"><div class="enemy-name">No enemies</div><div class="enemy-subline">This frame has no active enemies.</div></article>`
+        }</section>
+        ${player ? renderPlayerCard(player) : `<article class="actor-card"><div class="actor-name">No player entity</div></article>`}
+      </div>
+      <div class="support-stack">
+        ${renderResourceCards(frame)}
+        ${renderZoneGrid(frame)}
+      </div>
+    </section>
     <section class="hand-panel">
       <div class="hand-header">
         <div>
@@ -719,12 +800,17 @@ function renderArena(frame: ViewerFrame): string {
 }
 
 function renderTimeline(frame: ViewerFrame, loaded: LoadedBattleState): string {
-  return `<div class="timeline-list">${loaded.model.root_action_markers
-    .map((marker, index) => {
+  const activeActionIndex = frame.current_root_action?.index ?? 0;
+  const visibleWindow = getVisibleWindow(loaded.model.root_action_markers, activeActionIndex, 2, 3);
+
+  return `<div class="section-note">Showing ${escapeHtml(String(visibleWindow.items.length))} of ${escapeHtml(
+    String(loaded.model.root_action_markers.length),
+  )} actions near the current step.</div><div class="timeline-list">${visibleWindow.items
+    .map((marker) => {
       const isActive = frame.current_root_action?.resolution_id === marker.resolution_id;
       return `<button class="timeline-item ${isActive ? "is-active" : ""}" data-command="jump-seq" data-seq="${marker.end_seq}">
-        <div class="timeline-overline">Action ${index + 1} · seq ${marker.start_seq}-${marker.end_seq}</div>
-        <div class="timeline-title">${escapeHtml(loaded.actionLabels[index] ?? marker.label)}</div>
+        <div class="timeline-overline">Action ${marker.index + 1} · seq ${marker.start_seq}-${marker.end_seq}</div>
+        <div class="timeline-title">${escapeHtml(loaded.actionLabels[marker.index] ?? marker.label)}</div>
         <div class="timeline-copy mono">${escapeHtml(marker.resolution_id)}</div>
       </button>`;
     })
@@ -798,13 +884,26 @@ function renderStepDetails(frame: ViewerFrame, loaded: LoadedBattleState): strin
     </article>
     <article class="detail-card">
       <h2 class="detail-title">Raw Event</h2>
-      <pre class="code-block">${escapeHtml(JSON.stringify(frame.event, null, 2))}</pre>
+      <button class="detail-toggle" data-command="toggle-raw-event">
+        ${escapeHtml(state.rawEventExpanded ? "Hide Raw Event" : "Show Raw Event")}
+      </button>
+      ${
+        state.rawEventExpanded
+          ? `<pre class="code-block">${escapeHtml(JSON.stringify(frame.event, null, 2))}</pre>`
+          : `<div class="detail-copy">Hidden by default to keep the replay view compact.</div>`
+      }
     </article>
   </section>`;
 }
 
 function renderKeyMoments(frame: ViewerFrame, loaded: LoadedBattleState): string {
-  return `<div class="moments-list">${loaded.keyMoments
+  const momentSeqs = loaded.keyMoments.map((moment) => moment.seq);
+  const activeMomentIndex = getMarkerIndexBySeq(momentSeqs, frame.seq);
+  const visibleWindow = getVisibleWindow(loaded.keyMoments, Math.max(activeMomentIndex, 0), 2, 3);
+
+  return `<div class="section-note">Showing ${escapeHtml(String(visibleWindow.items.length))} of ${escapeHtml(
+    String(loaded.keyMoments.length),
+  )} selected moments near the current step.</div><div class="moments-list">${visibleWindow.items
     .map((moment) => {
       const isActive = moment.seq === frame.seq;
       return `<button class="moment-item ${isActive ? "is-active" : ""}" data-command="jump-seq" data-seq="${moment.seq}">
@@ -907,7 +1006,7 @@ function renderEmptyState(): string {
 }
 
 function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): string {
-  return `<div class="viewer-shell">
+  return `<div class="viewer-shell viewer-shell-loaded">
     <input id="battle-folder-input" class="hidden-input" type="file" webkitdirectory directory multiple />
     <section class="shell-top">
       <section class="surface summary-bar">
@@ -920,7 +1019,7 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
         </div>
         <div class="summary-side">
           <div class="status-copy">${escapeHtml(state.error ?? state.status)}</div>
-          <div class="hero-actions">
+          <div class="summary-actions">
             <button class="button-primary" data-command="open-folder-picker">Open Another Battle</button>
             <button class="button-ghost" data-command="open-folder-fallback">Manual Folder</button>
           </div>
@@ -973,9 +1072,6 @@ function renderLoadedState(loaded: LoadedBattleState, frame: ViewerFrame): strin
         ${renderKeyMoments(frame, loaded)}
       </aside>
     </main>
-    <div class="footer-note">State at seq ${escapeHtml(String(frame.seq))} · battle ${escapeHtml(
-      loaded.model.metadata.battle_id,
-    )}</div>
   </div>`;
 }
 
@@ -1024,6 +1120,16 @@ root.addEventListener("click", (event) => {
       }
       break;
     }
+    case "toggle-zone": {
+      const zoneName = target.getAttribute("data-zone");
+      if (zoneName) {
+        toggleZone(zoneName);
+      }
+      break;
+    }
+    case "toggle-raw-event":
+      toggleRawEvent();
+      break;
     case "jump-seq": {
       const seqValue = target.getAttribute("data-seq");
       if (seqValue) {
